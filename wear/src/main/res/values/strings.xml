@@ -5,4 +5,14 @@
     values-round/strings.xml for round devices.
     -->
     <string name="hello_world">From the Square world,\nHello, %1$s!</string>
+    <string name="recording_notification_channel">Recording</string>
+    <string name="recording_notification_channel_description">Audio recording notification</string>
+    <string name="recording_notification_title">Recording Audio</string>
+    <string name="recording_notification_text">Tap to stop recording</string>
+    <string name="recording_active">Recording...</string>
+    <string name="recording_stopped">Recording Stopped</string>
+    <string name="uploading">Uploading...</string>
+    <string name="upload_success">Upload Successful</string>
+    <string name="upload_failed">Upload Failed</string>
+    <string name="stop_recording">Stop Recording</string>
 </resources>

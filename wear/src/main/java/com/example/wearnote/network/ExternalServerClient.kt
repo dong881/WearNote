@@ -3,43 +3,50 @@ package com.example.wearnote.network
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 
 class ExternalServerClient {
     
     companion object {
         private const val TAG = "ExternalServerClient"
-        private const val SERVER_URL = "http://localhost:5000/process"
+        private const val SERVER_URL = "http://localhost:5000/process" // Change to your real server
     }
-    
-    private val client = OkHttpClient()
     
     suspend fun sendFileIdToServer(fileId: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            val json = JSONObject().apply {
-                put("file_id", fileId)
-            }
+            Log.d(TAG, "Sending file ID to server: $fileId")
             
-            val mediaType = "application/json; charset=utf-8".toMediaType()
-            val body = json.toString().toRequestBody(mediaType)
+            val url = URL(SERVER_URL)
+            val connection = url.openConnection() as HttpURLConnection
             
-            val request = Request.Builder()
-                .url(SERVER_URL)
-                .post(body)
-                .build()
+            try {
+                connection.requestMethod = "POST"
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.doOutput = true
                 
-            client.newCall(request).execute().use { response ->
-                val success = response.isSuccessful
-                if (!success) {
-                    Log.e(TAG, "Server error: ${response.code}")
-                }
-                return@withContext success
+                // Create JSON payload
+                val jsonPayload = JSONObject().apply {
+                    put("file_id", fileId)
+                }.toString()
+                
+                // Send the request
+                val outputStream = connection.outputStream
+                outputStream.write(jsonPayload.toByteArray())
+                outputStream.close()
+                
+                // Check response
+                val responseCode = connection.responseCode
+                Log.d(TAG, "Server response code: $responseCode")
+                
+                return@withContext (responseCode >= 200 && responseCode < 300)
+                
+            } finally {
+                connection.disconnect()
             }
+            
         } catch (e: IOException) {
             Log.e(TAG, "Error sending file ID to server", e)
             return@withContext false

@@ -11,6 +11,7 @@ import android.media.MediaRecorder
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.wearnote.MainActivity
@@ -52,7 +53,7 @@ class AudioRecorderService : Service() {
     private var recorder: MediaRecorder? = null
     private var outputFile: File? = null
     private var recordingJob: Job? = null
-    private var checkRecordingJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
     
     private val driveApiClient by lazy { DriveApiClient(applicationContext) }
     private val externalServerClient by lazy { ExternalServerClient() }
@@ -66,20 +67,28 @@ class AudioRecorderService : Service() {
         super.onCreate()
         Log.d(TAG, "Service created")
         createNotificationChannel()
-        
-        // Start a job to periodically log recorder status
-        startRecorderStatusChecking()
+        acquireWakeLock()
     }
     
-    private fun startRecorderStatusChecking() {
-        checkRecordingJob = serviceScope.launch {
-            while (true) {
-                val recorderState = if (recorder != null) "active" else "null"
-                val currentState = _recordingState.value
-                Log.d(TAG, "Recorder status: $recorderState, state: $currentState")
-                delay(5000) // Check every 5 seconds
+    private fun acquireWakeLock() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "WearNote::RecordingWakeLock"
+        ).apply {
+            acquire(10*60*1000L) // 10 minutes
+            Log.d(TAG, "Wake lock acquired")
+        }
+    }
+    
+    private fun releaseWakeLock() {
+        wakeLock?.let {
+            if (it.isHeld) {
+                it.release()
+                Log.d(TAG, "Wake lock released")
             }
         }
+        wakeLock = null
     }
 
     override fun onBind(intent: Intent?): IBinder {
@@ -90,22 +99,17 @@ class AudioRecorderService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "Service onStartCommand called")
         
-        try {
-            val notification = createNotification()
-            startForeground(NOTIFICATION_ID, notification)
-            Log.d(TAG, "Service started in foreground")
-            
-            if (_recordingState.value == RecordingState.IDLE) {
-                Log.d(TAG, "Starting recording from onStartCommand")
-                startRecording()
-            } else {
-                Log.d(TAG, "Recording already in progress, state: ${_recordingState.value}")
-            }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in onStartCommand", e)
+        startForeground(NOTIFICATION_ID, createNotification())
+        Log.d(TAG, "Service started in foreground")
+        
+        if (_recordingState.value == RecordingState.IDLE) {
+            Log.d(TAG, "Starting recording from onStartCommand")
+            startRecording()
+        } else {
+            Log.d(TAG, "Already in state: ${_recordingState.value}")
         }
         
+        // This ensures the service continues running if it's killed
         return START_STICKY
     }
 
@@ -119,7 +123,7 @@ class AudioRecorderService : Service() {
             try {
                 Log.d(TAG, "Starting recording...")
                 outputFile = createOutputFile()
-                Log.d(TAG, "Output file created at: ${outputFile?.absolutePath}")
+                Log.d(TAG, "Output file path: ${outputFile?.absolutePath}")
                 
                 recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     MediaRecorder(applicationContext)
@@ -128,45 +132,22 @@ class AudioRecorderService : Service() {
                     MediaRecorder()
                 }
                 
-                try {
-                    recorder?.apply {
-                        setAudioSource(MediaRecorder.AudioSource.MIC)
-                        Log.d(TAG, "Audio source set")
-                        
-                        setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                        Log.d(TAG, "Output format set")
-                        
-                        setOutputFile(outputFile?.absolutePath)
-                        Log.d(TAG, "Output file path set")
-                        
-                        setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                        Log.d(TAG, "Audio encoder set")
-                        
-                        setAudioSamplingRate(44100)
-                        Log.d(TAG, "Sampling rate set")
-                        
-                        setAudioEncodingBitRate(96000)
-                        Log.d(TAG, "Encoding bit rate set")
-                        
-                        Log.d(TAG, "Preparing recorder...")
-                        prepare()
-                        Log.d(TAG, "Recorder prepared")
-                        
-                        Log.d(TAG, "Starting recorder...")
-                        start()
-                        Log.d(TAG, "Recorder started successfully")
-                        
-                        _recordingState.value = RecordingState.RECORDING
-                        Log.d(TAG, "State changed to RECORDING")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error configuring MediaRecorder", e)
-                    _recordingState.value = RecordingState.IDLE
-                    throw e // Re-throw to be handled by the outer try-catch
+                recorder?.apply {
+                    setAudioSource(MediaRecorder.AudioSource.MIC)
+                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setOutputFile(outputFile?.absolutePath)
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                    setAudioSamplingRate(44100)
+                    setAudioEncodingBitRate(96000)
+                    prepare()
+                    start()
+                    
+                    Log.d(TAG, "MediaRecorder started successfully")
+                    _recordingState.value = RecordingState.RECORDING
                 }
                 
             } catch (e: Exception) {
-                Log.e(TAG, "Error in startRecording", e)
+                Log.e(TAG, "Error starting recording", e)
                 cleanupRecorder()
                 _recordingState.value = RecordingState.IDLE
             }
@@ -186,26 +167,24 @@ class AudioRecorderService : Service() {
                 try {
                     recorder?.apply {
                         stop()
-                        Log.d(TAG, "Recorder stopped")
                         release()
-                        Log.d(TAG, "Recorder released")
+                        Log.d(TAG, "Recorder stopped and released")
                     }
                     recorder = null
                 } catch (e: Exception) {
                     Log.e(TAG, "Error stopping recorder", e)
                 }
                 
-                // Handle the recording file
                 outputFile?.let { file ->
                     if (file.exists() && file.length() > 0) {
-                        Log.d(TAG, "Recording saved: ${file.absolutePath}, size: ${file.length()} bytes")
+                        Log.d(TAG, "Recording file saved: ${file.absolutePath} (${file.length()} bytes)")
                         uploadRecording(file)
                     } else {
-                        Log.e(TAG, "Recording file is missing or empty: ${file.absolutePath}")
+                        Log.e(TAG, "Recording file is missing or empty")
                         _recordingState.value = RecordingState.UPLOAD_FAILED
                     }
                 } ?: run {
-                    Log.e(TAG, "Output file was null")
+                    Log.e(TAG, "Output file is null")
                     _recordingState.value = RecordingState.UPLOAD_FAILED
                 }
                 
@@ -219,30 +198,36 @@ class AudioRecorderService : Service() {
     private fun uploadRecording(file: File) {
         serviceScope.launch {
             try {
-                Log.d(TAG, "Starting upload process")
+                Log.d(TAG, "Starting real upload process")
                 _recordingState.value = RecordingState.UPLOADING
                 
-                // For testing, simulate upload
-                Log.d(TAG, "Simulating upload for testing...")
-                delay(3000) // Simulate 3s upload time
-                
-                // In a real app, this would call the Drive API
-                // val fileId = driveApiClient.uploadFileToDrive(file)
-                val fileId = "test_file_id_${System.currentTimeMillis()}"
+                // Try to authenticate and upload to Google Drive
+                val fileId = driveApiClient.uploadFileToDrive(file)
                 
                 if (fileId != null) {
-                    Log.d(TAG, "Upload successful, file ID: $fileId")
-                    _recordingState.value = RecordingState.UPLOAD_SUCCESS
+                    Log.d(TAG, "File successfully uploaded to Drive, ID: $fileId")
                     
-                    // In a real app, this would call your server
-                    // val result = externalServerClient.sendFileIdToServer(fileId)
+                    // Send the file ID to the external server
+                    val serverResult = externalServerClient.sendFileIdToServer(fileId)
+                    
+                    if (serverResult) {
+                        Log.d(TAG, "File ID successfully sent to server")
+                        _recordingState.value = RecordingState.UPLOAD_SUCCESS
+                        
+                        // Keep success message visible for a moment then stop
+                        delay(2000)
+                        stopSelf()
+                    } else {
+                        Log.e(TAG, "Failed to send file ID to server")
+                        _recordingState.value = RecordingState.UPLOAD_FAILED
+                    }
                 } else {
-                    Log.e(TAG, "Upload failed - no file ID returned")
+                    Log.e(TAG, "Failed to upload to Google Drive")
                     _recordingState.value = RecordingState.UPLOAD_FAILED
                 }
                 
             } catch (e: Exception) {
-                Log.e(TAG, "Error uploading recording", e)
+                Log.e(TAG, "Error during upload process", e)
                 _recordingState.value = RecordingState.UPLOAD_FAILED
             }
         }
@@ -252,7 +237,6 @@ class AudioRecorderService : Service() {
         try {
             recorder?.apply {
                 release()
-                Log.d(TAG, "Recorder released during cleanup")
             }
             recorder = null
         } catch (e: Exception) {
@@ -268,10 +252,7 @@ class AudioRecorderService : Service() {
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val fileName = "wearnote_$timestamp.m4a"
         val dir = applicationContext.getExternalFilesDir(null)
-        return File(dir, fileName).apply {
-            parentFile?.mkdirs()
-            Log.d(TAG, "Created output file: $absolutePath")
-        }
+        return File(dir, fileName)
     }
 
     private fun createNotificationChannel() {
@@ -286,7 +267,6 @@ class AudioRecorderService : Service() {
             
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)
-            Log.d(TAG, "Notification channel created")
         }
     }
 
@@ -304,18 +284,22 @@ class AudioRecorderService : Service() {
             .setContentText(getString(R.string.recording_notification_text))
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pendingIntent)
+            .setOngoing(true)  // Cannot be dismissed by the user
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "Service onDestroy called")
+        Log.d(TAG, "Service being destroyed")
         
-        checkRecordingJob?.cancel()
         recordingJob?.cancel()
         
         if (_recordingState.value == RecordingState.RECORDING) {
+            Log.d(TAG, "Recording was in progress, cleaning up")
             cleanupRecorder()
         }
+        
+        releaseWakeLock()
     }
 }

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
@@ -122,7 +123,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         
-        // Check for permissions
+        // Request permissions first, then start recording service
         checkAndRequestPermissions()
     }
     
@@ -130,9 +131,9 @@ class MainActivity : ComponentActivity() {
     fun AppContent() {
         val state by _uiStateFlow.collectAsState()
         
-        // Debug logging on composition
+        // Only log debug info, don't display it on the UI
         DisposableEffect(state) {
-            Log.d(TAG, "Composing UI with state: isRecording=${state.isRecording}, " +
+            Log.d(TAG, "UI State: isRecording=${state.isRecording}, " +
                    "uploadStatus=${state.uploadStatus}, errorMsg=${state.errorMessage}")
             onDispose {}
         }
@@ -142,7 +143,6 @@ class MainActivity : ComponentActivity() {
             isRecording = state.isRecording,
             uploadStatus = state.uploadStatus,
             errorMessage = state.errorMessage,
-            debugInfo = "${state.debugInfo} [${System.currentTimeMillis() % 100000}]",
             onStopRecording = {
                 Log.d(TAG, "Stop recording requested")
                 service?.stopRecording() ?: run {
@@ -199,18 +199,20 @@ class MainActivity : ComponentActivity() {
     
     private fun startRecordingService() {
         try {
-            Log.d(TAG, "Starting recording service")
+            Log.d(TAG, "Starting and binding to recording service")
             val intent = Intent(this, AudioRecorderService::class.java)
-            startForegroundService(intent)
+            
+            // Start as foreground service to keep it running in background
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            
+            // Bind to the service
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
-            _uiStateFlow.value = _uiStateFlow.value.copy(
-                debugInfo = "Starting service..."
-            )
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting service", e)
-            _uiStateFlow.value = _uiStateFlow.value.copy(
-                errorMessage = "Service start error: ${e.message}"
-            )
+            Log.e(TAG, "Error starting recording service", e)
         }
     }
 
@@ -246,6 +248,12 @@ class MainActivity : ComponentActivity() {
     
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "onDestroy called")
+        Log.d(TAG, "onDestroy called - service should continue running in background")
+        
+        // Unbind but don't stop the service
+        if (bound) {
+            unbindService(serviceConnection)
+            bound = false
+        }
     }
 }

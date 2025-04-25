@@ -25,7 +25,9 @@ fun RecordingScreen(
     uploadStatus: String,
     errorMessage: String = "",
     debugInfo: String = "",
-    onStopRecording: () -> Unit
+    onStopRecording: () -> Unit,
+    onPauseRecording: () -> Unit = {}, // Pause function parameter
+    onResumeRecording: () -> Unit = {} // Added resume function parameter
 ) {
     Box(
         modifier = modifier
@@ -36,7 +38,17 @@ fun RecordingScreen(
         when {
             isRecording -> {
                 Log.d(TAG, "Showing recording controls")
-                RecordingControls(onStopRecording = onStopRecording)
+                RecordingControls(
+                    onStopRecording = onStopRecording,
+                    onPauseRecording = onPauseRecording
+                )
+            }
+            uploadStatus == "Paused" -> {
+                Log.d(TAG, "Showing paused controls")
+                PausedControls(
+                    onStopRecording = onStopRecording,
+                    onResumeRecording = onResumeRecording
+                )
             }
             uploadStatus == "Upload Success" -> {
                 Log.d(TAG, "Showing upload success")
@@ -63,39 +75,104 @@ fun RecordingScreen(
 }
 
 @Composable
-fun RecordingControls(onStopRecording: () -> Unit) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier.fillMaxWidth()
+fun RecordingControls(
+    onStopRecording: () -> Unit,
+    onPauseRecording: () -> Unit = {}
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+        modifier = Modifier.padding(16.dp)
     ) {
+        // Pause button
         Button(
             onClick = { 
-                Log.d(TAG, "Stop recording button clicked")
+                Log.d(TAG, "Pause button clicked")
+                onPauseRecording() 
+            },
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape),
+            colors = ButtonDefaults.buttonColors(
+                backgroundColor = Color(0xFFFFB74D) // Orange/amber color
+            )
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_media_pause),
+                contentDescription = "Pause Recording",
+                tint = Color.White
+            )
+        }
+        
+        // Stop button
+        Button(
+            onClick = { 
+                Log.d(TAG, "Stop button clicked")
                 onStopRecording() 
             },
             modifier = Modifier
-                .size(60.dp)
+                .size(56.dp)
                 .clip(CircleShape),
             colors = ButtonDefaults.buttonColors(
                 backgroundColor = Color(0xFFE57373) // Light red color
             )
         ) {
             Icon(
-                painter = painterResource(id = android.R.drawable.ic_media_pause),
+                painter = painterResource(id = R.drawable.ic_media_stop),
                 contentDescription = "Stop Recording",
                 tint = Color.White
             )
         }
+    }
+}
+
+@Composable
+fun PausedControls(
+    onStopRecording: () -> Unit,
+    onResumeRecording: () -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+        modifier = Modifier.padding(16.dp)
+    ) {
+        // Play button
+        Button(
+            onClick = { 
+                Log.d(TAG, "Play button clicked")
+                onResumeRecording() 
+            },
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape),
+            colors = ButtonDefaults.buttonColors(
+                backgroundColor = Color(0xFF81C784) // Green color
+            )
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_media_play),
+                contentDescription = "Resume Recording",
+                tint = Color.White
+            )
+        }
         
-        Spacer(modifier = Modifier.height(8.dp))
-        
-        Text(
-            text = "Stop",
-            color = Color.White,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Normal
-        )
+        // Stop button
+        Button(
+            onClick = { 
+                Log.d(TAG, "Stop button clicked")
+                onStopRecording() 
+            },
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape),
+            colors = ButtonDefaults.buttonColors(
+                backgroundColor = Color(0xFFE57373) // Light red color
+            )
+        ) {
+            Icon(
+                painter = painterResource(id = R.drawable.ic_media_stop),
+                contentDescription = "Stop Recording",
+                tint = Color.White
+            )
+        }
     }
 }
 

@@ -41,6 +41,7 @@ class AudioRecorderService : Service() {
     enum class RecordingState {
         IDLE,
         RECORDING,
+        PAUSED,  // Added PAUSED state
         UPLOADING,
         UPLOAD_SUCCESS,
         UPLOAD_FAILED
@@ -150,6 +151,65 @@ class AudioRecorderService : Service() {
                 Log.e(TAG, "Error starting recording", e)
                 cleanupRecorder()
                 _recordingState.value = RecordingState.IDLE
+            }
+        }
+    }
+
+    fun pauseRecording() {
+        if (_recordingState.value != RecordingState.RECORDING) {
+            Log.d(TAG, "Not recording, ignoring pause request")
+            return
+        }
+        
+        serviceScope.launch {
+            try {
+                Log.d(TAG, "Pausing recording...")
+                
+                try {
+                    recorder?.apply {
+                        pause()
+                        Log.d(TAG, "Recorder paused")
+                    }
+                    _recordingState.value = RecordingState.PAUSED
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error pausing recorder", e)
+                    // Continue recording if pause fails
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in pauseRecording", e)
+            }
+        }
+    }
+
+    fun resumeRecording() {
+        if (_recordingState.value != RecordingState.PAUSED) {
+            Log.d(TAG, "Not paused, ignoring resume request")
+            return
+        }
+        
+        serviceScope.launch {
+            try {
+                Log.d(TAG, "Resuming recording...")
+                
+                try {
+                    recorder?.apply {
+                        resume()
+                        Log.d(TAG, "Recorder resumed")
+                    }
+                    _recordingState.value = RecordingState.RECORDING
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error resuming recorder", e)
+                    // If resume fails, try to restart recording
+                    try {
+                        recorder?.release()
+                        recorder = null
+                        startRecording()
+                    } catch (e2: Exception) {
+                        Log.e(TAG, "Error restarting recorder after resume failure", e2)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in resumeRecording", e)
             }
         }
     }

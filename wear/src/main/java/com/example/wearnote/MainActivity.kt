@@ -35,7 +35,9 @@ import com.example.wearnote.ui.RecordingScreen
 import com.example.wearnote.ui.theme.WearNoteTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelChildren
 
 class MainActivity : ComponentActivity() {
     
@@ -86,24 +88,31 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 service?.recordingState?.collect { state ->
-                    Log.d(TAG, "Service state updated: $state")
-                    _uiStateFlow.value = _uiStateFlow.value.copy(
-                        isRecording = state == AudioRecorderService.RecordingState.RECORDING,
-                        uploadStatus = when (state) {
-                            AudioRecorderService.RecordingState.UPLOADING -> "Uploading..."
-                            AudioRecorderService.RecordingState.UPLOAD_SUCCESS -> "Upload Success"
-                            AudioRecorderService.RecordingState.UPLOAD_FAILED -> "Upload Failed"
-                            else -> ""
-                        },
-                        debugInfo = "Service state: $state"
-                    )
+                    if (isActive) {
+                        Log.d(TAG, "Service state updated: $state")
+                        _uiStateFlow.value = _uiStateFlow.value.copy(
+                            isRecording = state == AudioRecorderService.RecordingState.RECORDING,
+                            uploadStatus = when (state) {
+                                AudioRecorderService.RecordingState.UPLOADING -> "Uploading..."
+                                AudioRecorderService.RecordingState.UPLOAD_SUCCESS -> "Upload Success"
+                                AudioRecorderService.RecordingState.UPLOAD_FAILED -> "Upload Failed"
+                                AudioRecorderService.RecordingState.PAUSED -> "Paused"
+                                else -> ""
+                            },
+                            debugInfo = "Service state: $state"
+                        )
+                    }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error collecting state", e)
-                _uiStateFlow.value = _uiStateFlow.value.copy(
-                    errorMessage = "Error tracking state: ${e.message}",
-                    debugInfo = "Collection error: ${e.javaClass.simpleName}"
-                )
+                // Only log the error if it's not a standard cancellation
+                if (e !is kotlinx.coroutines.CancellationException) {
+                    Log.e(TAG, "Error collecting state", e)
+                    if (isActive) {
+                        _uiStateFlow.value = _uiStateFlow.value.copy(
+                            errorMessage = "Error tracking state: ${e.message}"
+                        )
+                    }
+                }
             }
         }
     }
@@ -143,10 +152,29 @@ class MainActivity : ComponentActivity() {
             isRecording = state.isRecording,
             uploadStatus = state.uploadStatus,
             errorMessage = state.errorMessage,
+            debugInfo = state.debugInfo,
             onStopRecording = {
                 Log.d(TAG, "Stop recording requested")
                 service?.stopRecording() ?: run {
                     Log.e(TAG, "Cannot stop - service is null")
+                    _uiStateFlow.value = _uiStateFlow.value.copy(
+                        errorMessage = "Service unavailable"
+                    )
+                }
+            },
+            onPauseRecording = {
+                Log.d(TAG, "Pause recording requested")
+                service?.pauseRecording() ?: run {
+                    Log.e(TAG, "Cannot pause - service is null")
+                    _uiStateFlow.value = _uiStateFlow.value.copy(
+                        errorMessage = "Service unavailable"
+                    )
+                }
+            },
+            onResumeRecording = {
+                Log.d(TAG, "Resume recording requested")
+                service?.resumeRecording() ?: run {
+                    Log.e(TAG, "Cannot resume - service is null")
                     _uiStateFlow.value = _uiStateFlow.value.copy(
                         errorMessage = "Service unavailable"
                     )
@@ -240,6 +268,9 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         Log.d(TAG, "onStop called")
+        // Cancel any active flows to prevent crashes when the activity is stopped
+        lifecycleScope.coroutineContext.cancelChildren()
+        
         if (bound) {
             unbindService(serviceConnection)
             bound = false

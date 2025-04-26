@@ -64,7 +64,6 @@ dependencies {
     
     // Wear OS dependencies
     implementation("androidx.wear:wear:1.3.0")
-    // Remove problematic dependency: implementation("androidx.wear.widget:wear-widget:1.0.0")
     
     // Compose for Wear OS
     implementation("androidx.activity:activity-compose:1.8.2")
@@ -75,6 +74,7 @@ dependencies {
     
     // Google Sign-In & Drive
     implementation("com.google.android.gms:play-services-auth:20.7.0")
+    implementation("com.google.android.gms:play-services-base:18.3.0")
     implementation("com.google.android.gms:play-services-wearable:18.1.0")
     implementation("com.google.api-client:google-api-client-android:2.2.0") {
         exclude(group = "org.apache.httpcomponents")

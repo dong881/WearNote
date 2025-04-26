@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Button
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,10 +27,12 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.wear.compose.material.*
 import com.example.wearnote.service.RecorderService
+import com.example.wearnote.auth.ConfigHelper
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
@@ -270,7 +273,6 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun handleSignInResult(result: androidx.activity.result.ActivityResult) {
-        // Implement sign-in result handling
         try {
             val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
             val account = task.getResult(ApiException::class.java)
@@ -278,8 +280,33 @@ class MainActivity : ComponentActivity() {
             // Refresh UI
             setContent { WearApp() }
         } catch (e: ApiException) {
-            Log.w(TAG, "Sign in failed", e)
+            Log.e(TAG, "Google Sign-In Failed: ${e.statusCode} - ${e.message}")
+            when (e.statusCode) {
+                CommonStatusCodes.DEVELOPER_ERROR -> {
+                    Log.e(TAG, "開發者錯誤 (10) - 表示 CLIENT_ID 或 SHA-1 指紋配置錯誤")
+                    // 輸出診斷資訊
+                    ConfigHelper.checkDeveloperConfiguration(this)
+                    showErrorMessage("登入失敗: 開發者配置錯誤，請檢查 Logcat 獲取詳細資訊")
+                }
+                CommonStatusCodes.NETWORK_ERROR -> {
+                    Log.e(TAG, "網絡錯誤 - 請檢查網絡連接")
+                    showErrorMessage("登入失敗: 網絡連接問題")
+                }
+                CommonStatusCodes.CANCELED -> {
+                    Log.d(TAG, "使用者取消登入")
+                    showErrorMessage("登入已取消")
+                }
+                else -> {
+                    Log.e(TAG, "其他錯誤: ${e.statusCode}")
+                    showErrorMessage("登入失敗: 代碼 ${e.statusCode}")
+                }
+            }
         }
+    }
+
+    private fun showErrorMessage(message: String) {
+        // 在 Wear OS 上顯示錯誤訊息
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
     
     private fun checkFirstLaunch() {

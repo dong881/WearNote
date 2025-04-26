@@ -24,6 +24,20 @@
             </intent-filter>
         </activity>
 
+        <!-- OAuth redirect activity -->
+        <activity
+            android:name=".auth.OAuthRedirectActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="com.example.wearnote"
+                    android:host="oauth2callback" />
+            </intent-filter>
+        </activity>
+
         <!-- 註冊前台錄音 Service -->
         <service
             android:name="com.example.wearrecorder.RecorderService"

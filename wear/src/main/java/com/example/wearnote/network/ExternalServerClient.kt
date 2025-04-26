@@ -12,7 +12,7 @@ class ExternalServerClient {
     
     companion object {
         private const val TAG = "ExternalServerClient"
-        private const val SERVER_URL = "http://localhost:5000/process" // Change to your real server
+        private const val SERVER_URL = "http://140.118.123.107:5000/process" // Change to your real server
     }
     
     suspend fun sendFileIdToServer(fileId: String): Boolean = withContext(Dispatchers.IO) {

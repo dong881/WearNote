@@ -41,7 +41,7 @@ class AudioRecorderService : Service() {
     enum class RecordingState {
         IDLE,
         RECORDING,
-        PAUSED,  // Added PAUSED state
+        PAUSED,
         UPLOADING,
         UPLOAD_SUCCESS,
         UPLOAD_FAILED
@@ -110,7 +110,6 @@ class AudioRecorderService : Service() {
             Log.d(TAG, "Already in state: ${_recordingState.value}")
         }
         
-        // This ensures the service continues running if it's killed
         return START_STICKY
     }
 
@@ -173,7 +172,6 @@ class AudioRecorderService : Service() {
                     _recordingState.value = RecordingState.PAUSED
                 } catch (e: Exception) {
                     Log.e(TAG, "Error pausing recorder", e)
-                    // Continue recording if pause fails
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error in pauseRecording", e)
@@ -199,7 +197,6 @@ class AudioRecorderService : Service() {
                     _recordingState.value = RecordingState.RECORDING
                 } catch (e: Exception) {
                     Log.e(TAG, "Error resuming recorder", e)
-                    // If resume fails, try to restart recording
                     try {
                         recorder?.release()
                         recorder = null
@@ -258,29 +255,33 @@ class AudioRecorderService : Service() {
     private fun uploadRecording(file: File) {
         serviceScope.launch {
             try {
-                Log.d(TAG, "Starting real upload process")
+                Log.d(TAG, "Starting upload process")
                 _recordingState.value = RecordingState.UPLOADING
                 
-                // Try to authenticate and upload to Google Drive
+                saveFileInfo(file)
+                
                 val fileId = driveApiClient.uploadFileToDrive(file)
                 
                 if (fileId != null) {
                     Log.d(TAG, "File successfully uploaded to Drive, ID: $fileId")
                     
-                    // Send the file ID to the external server
-                    val serverResult = externalServerClient.sendFileIdToServer(fileId)
-                    
-                    if (serverResult) {
-                        Log.d(TAG, "File ID successfully sent to server")
-                        _recordingState.value = RecordingState.UPLOAD_SUCCESS
+                    try {
+                        val serverResult = externalServerClient.sendFileIdToServer(fileId)
                         
-                        // Keep success message visible for a moment then stop
-                        delay(2000)
-                        stopSelf()
-                    } else {
-                        Log.e(TAG, "Failed to send file ID to server")
-                        _recordingState.value = RecordingState.UPLOAD_FAILED
+                        if (serverResult) {
+                            Log.d(TAG, "File ID successfully sent to server")
+                        } else {
+                            Log.e(TAG, "Failed to send file ID to server, but Drive upload was successful")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error sending to server, but Drive upload was successful", e)
                     }
+                    
+                    _recordingState.value = RecordingState.UPLOAD_SUCCESS
+                    
+                    delay(2000)
+                    stopSelf()
+                    
                 } else {
                     Log.e(TAG, "Failed to upload to Google Drive")
                     _recordingState.value = RecordingState.UPLOAD_FAILED
@@ -292,7 +293,22 @@ class AudioRecorderService : Service() {
             }
         }
     }
-    
+
+    private fun saveFileInfo(file: File) {
+        try {
+            val prefs = applicationContext.getSharedPreferences("WearNotePrefs", Context.MODE_PRIVATE)
+            prefs.edit().apply {
+                putString("last_recording_path", file.absolutePath)
+                putLong("last_recording_size", file.length())
+                putLong("last_recording_time", System.currentTimeMillis())
+                apply()
+            }
+            Log.d(TAG, "Saved recording info to shared preferences")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error saving recording info", e)
+        }
+    }
+
     private fun cleanupRecorder() {
         try {
             recorder?.apply {
@@ -311,8 +327,14 @@ class AudioRecorderService : Service() {
     private fun createOutputFile(): File {
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
         val fileName = "wearnote_$timestamp.m4a"
+        
         val dir = applicationContext.getExternalFilesDir(null)
-        return File(dir, fileName)
+        dir?.mkdirs()
+        
+        val file = File(dir, fileName)
+        Log.d(TAG, "Created output file at: ${file.absolutePath}")
+        
+        return file
     }
 
     private fun createNotificationChannel() {
@@ -344,7 +366,7 @@ class AudioRecorderService : Service() {
             .setContentText(getString(R.string.recording_notification_text))
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pendingIntent)
-            .setOngoing(true)  // Cannot be dismissed by the user
+            .setOngoing(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }

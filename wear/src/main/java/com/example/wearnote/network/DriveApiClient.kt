@@ -5,13 +5,13 @@ import android.accounts.AccountManager
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
-import android.os.Build
-import android.provider.Settings
 import android.util.Log
-import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.Scope
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.FileContent
 import com.google.api.client.http.javanet.NetHttpTransport
@@ -31,42 +31,49 @@ class DriveApiClient(private val context: Context) {
         private const val TAG = "DriveApiClient"
         private const val AUDIO_MIME_TYPE = "audio/mp4"
         
-        // Flag to simulate successful upload for testing
-        private const val SIMULATE_SUCCESS = true
+        // Store the current pending upload file for when auth is complete
+        private var pendingUploadFile: File? = null
+        private var authRequested = false
     }
 
     suspend fun uploadFileToDrive(file: java.io.File): String? = withContext(Dispatchers.IO) {
         try {
-            Log.d(TAG, "Starting Drive upload process")
+            Log.d(TAG, "Starting actual Drive upload process for file: ${file.absolutePath}")
             
             // Create a local backup copy in a more accessible location
             val backupFile = createBackupFile(file)
             Log.d(TAG, "Created backup file at: ${backupFile?.absolutePath}")
             
-            // Option to simulate a successful upload for testing
-            if (SIMULATE_SUCCESS) {
-                Log.d(TAG, "SIMULATING successful upload (test mode)")
-                return@withContext "simulated_file_id_${System.currentTimeMillis()}"
-            }
-            
-            // Check if we have the GET_ACCOUNTS permission
-            if (ContextCompat.checkSelfPermission(
-                    context, 
-                    android.Manifest.permission.GET_ACCOUNTS
-                ) != PackageManager.PERMISSION_GRANTED) {
-                Log.e(TAG, "Missing GET_ACCOUNTS permission")
+            // Verify file exists and has content
+            if (!file.exists() || file.length() == 0L) {
+                Log.e(TAG, "File doesn't exist or is empty: ${file.absolutePath}")
                 return@withContext null
             }
             
-            // Get Google account credential
-            val credential = getGoogleAccountCredential()
+            // Store as the current pending upload in case we need to request auth
+            pendingUploadFile = file
             
-            if (credential == null || credential.selectedAccount == null) {
-                Log.e(TAG, "No Google account available")
+            // Check if we have Google account permission already
+            val account = GoogleSignIn.getLastSignedInAccount(context)
+            
+            if (account == null) {
+                Log.d(TAG, "No Google account signed in - requesting auth")
+                // We need to request sign-in from the main activity
+                authRequested = true
+                
+                // For now, we can't continue - main activity will need to handle this
+                Log.e(TAG, "Authentication needed - please grant Drive access")
                 return@withContext null
             }
             
-            Log.d(TAG, "Using account: ${credential.selectedAccount?.name}")
+            Log.d(TAG, "Using Google account: ${account.email}")
+            
+            // Use the account to create a credential
+            val credential = GoogleAccountCredential.usingOAuth2(
+                context,
+                Collections.singleton(DriveScopes.DRIVE_FILE)
+            )
+            credential.selectedAccount = account.account
             
             // Initialize Drive service
             val transport = NetHttpTransport()
@@ -76,7 +83,7 @@ class DriveApiClient(private val context: Context) {
                 .setApplicationName("WearNote")
                 .build()
             
-            Log.d(TAG, "Drive service initialized")
+            Log.d(TAG, "Drive service initialized successfully")
             
             // Create file metadata
             val fileMetadata = com.google.api.services.drive.model.File().apply {
@@ -87,28 +94,38 @@ class DriveApiClient(private val context: Context) {
             // Upload file content
             val mediaContent = FileContent(AUDIO_MIME_TYPE, file)
             
-            Log.d(TAG, "Starting Drive API upload request")
+            Log.d(TAG, "Starting Drive API upload request for file: ${file.name} (${file.length()} bytes)")
             
-            try {
-                // Execute the upload
-                val uploadedFile = service.files().create(fileMetadata, mediaContent)
-                    .setFields("id, name")
-                    .execute()
-                
-                Log.d(TAG, "Upload successful: ID=${uploadedFile.id}, Name=${uploadedFile.name}")
-                return@withContext uploadedFile.id
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "Drive upload execution error", e)
-                return@withContext null
-            }
+            // Execute the upload
+            val uploadedFile = service.files().create(fileMetadata, mediaContent)
+                .setFields("id, name, size, mimeType")
+                .execute()
             
-        } catch (e: IOException) {
-            Log.e(TAG, "Drive upload error", e)
+            Log.d(TAG, "Upload successful! ID=${uploadedFile.id}, Name=${uploadedFile.name}")
+            return@withContext uploadedFile.id
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Drive upload error: ${e.message}", e)
             return@withContext null
         }
     }
     
+    // For the Activity to check if auth is needed
+    fun isAuthenticationRequested(): Boolean {
+        return authRequested
+    }
+    
+    // Reset auth request flag
+    fun resetAuthRequest() {
+        authRequested = false
+    }
+    
+    // For the Activity to check if there's a pending upload
+    fun getPendingUploadFile(): File? {
+        return pendingUploadFile
+    }
+    
+    // Create a backup copy of the file in an accessible location
     private fun createBackupFile(sourceFile: File): File? {
         try {
             // Create a backup in a more accessible directory
@@ -131,55 +148,6 @@ class DriveApiClient(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "Error creating backup file", e)
             return null
-        }
-    }
-    
-    private fun getGoogleAccountCredential(): GoogleAccountCredential? {
-        try {
-            val credential = GoogleAccountCredential.usingOAuth2(
-                context, 
-                Collections.singleton(DriveScopes.DRIVE_FILE)
-            )
-            
-            // Try to select an account
-            val am = AccountManager.get(context)
-            val accounts = am.getAccountsByType("com.google")
-            
-            Log.d(TAG, "Found ${accounts.size} Google accounts")
-            accounts.forEach { 
-                Log.d(TAG, "Account: ${it.name}") 
-            }
-            
-            if (accounts.isNotEmpty()) {
-                credential.selectedAccount = accounts[0]
-                return credential
-            } else {
-                Log.e(TAG, "No Google accounts found on device")
-                
-                // Suggest adding a Google account
-                suggestAddingGoogleAccount()
-                return null
-            }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Error getting Google credential", e)
-            return null
-        }
-    }
-    
-    private fun suggestAddingGoogleAccount() {
-        try {
-            Log.d(TAG, "Suggesting to add a Google account")
-            
-            // This is where you would typically show a dialog to the user
-            // For now, we'll just log the suggestion
-            
-            // You could also direct users to add an account with:
-            // val intent = Intent(Settings.ACTION_ADD_ACCOUNT)
-            // intent.putExtra(Settings.EXTRA_ACCOUNT_TYPES, arrayOf("com.google"))
-            // context.startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error suggesting to add Google account", e)
         }
     }
 }

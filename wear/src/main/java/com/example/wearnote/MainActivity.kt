@@ -1,17 +1,18 @@
 package com.example.wearnote
 
 import android.Manifest
+import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -30,12 +31,20 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.wear.compose.material.MaterialTheme
+import com.example.wearnote.network.DriveApiClient
 import com.example.wearnote.service.AudioRecorderService
 import com.example.wearnote.ui.RecordingScreen
 import com.example.wearnote.ui.theme.WearNoteTheme
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.Scope
+import com.google.android.gms.tasks.Task
+import com.google.api.services.drive.DriveScopes
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancelChildren
 
@@ -43,6 +52,7 @@ class MainActivity : ComponentActivity() {
     
     companion object {
         private const val TAG = "MainActivity"
+        private const val SIGN_IN_REQUEST_CODE = 1001
     }
     
     private var service: AudioRecorderService? = null
@@ -54,10 +64,29 @@ class MainActivity : ComponentActivity() {
     
     data class UIState(
         val isRecording: Boolean = false,
+        val isPaused: Boolean = false,
         val uploadStatus: String = "",
         val errorMessage: String = "",
         val debugInfo: String = "Initializing..."
     )
+    
+    private lateinit var googleSignInClient: GoogleSignInClient
+    private lateinit var driveApiClient: DriveApiClient
+    
+    private val signInLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            Log.d(TAG, "Google sign-in successful")
+            val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+            handleSignInResult(task)
+        } else {
+            Log.e(TAG, "Google sign-in failed: ${result.resultCode}")
+            _uiStateFlow.value = _uiStateFlow.value.copy(
+                errorMessage = "Google sign-in failed"
+            )
+        }
+    }
     
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -84,103 +113,101 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        Log.d(TAG, "onCreate called")
+        
+        // Initialize DriveApiClient
+        driveApiClient = DriveApiClient(this)
+        
+        // Configure Google Sign In
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestScopes(Scope(DriveScopes.DRIVE_FILE))
+            .build()
+        
+        googleSignInClient = GoogleSignIn.getClient(this, gso)
+        
+        setContent {
+            WearNoteTheme {
+                AppContent()
+            }
+        }
+        
+        // Check if the user is already signed in
+        val account = GoogleSignIn.getLastSignedInAccount(this)
+        if (account != null) {
+            Log.d(TAG, "User already signed in: ${account.email}")
+        } else {
+            Log.d(TAG, "User not signed in, requesting sign-in")
+            signIn()
+        }
+        
+        // Check and request permissions
+        checkAndRequestPermissions()
+    }
+    
+    private fun signIn() {
+        try {
+            val signInIntent = googleSignInClient.signInIntent
+            signInLauncher.launch(signInIntent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting sign-in", e)
+        }
+    }
+    
+    private fun handleSignInResult(completedTask: Task<GoogleSignInAccount>) {
+        try {
+            val account = completedTask.getResult(ApiException::class.java)
+            Log.d(TAG, "Signed in as: ${account.email}")
+            
+            // Check if we need to resume an upload
+            service?.let { service ->
+                if (driveApiClient.isAuthenticationRequested()) {
+                    Log.d(TAG, "Resuming upload after authentication")
+                    driveApiClient.resetAuthRequest()
+                    val pendingFile = driveApiClient.getPendingUploadFile()
+                    if (pendingFile != null) {
+                        service.resumeUpload(pendingFile)
+                    }
+                }
+            }
+            
+        } catch (e: ApiException) {
+            Log.e(TAG, "Sign-in failed: ${e.statusCode}", e)
+            _uiStateFlow.value = _uiStateFlow.value.copy(
+                errorMessage = "Google sign-in failed: ${e.statusCode}"
+            )
+        }
+    }
+    
     private fun observeServiceState() {
         lifecycleScope.launch {
             try {
                 service?.recordingState?.collect { state ->
-                    if (isActive) {
-                        Log.d(TAG, "Service state updated: $state")
-                        _uiStateFlow.value = _uiStateFlow.value.copy(
-                            isRecording = state == AudioRecorderService.RecordingState.RECORDING,
-                            uploadStatus = when (state) {
-                                AudioRecorderService.RecordingState.UPLOADING -> "Uploading..."
-                                AudioRecorderService.RecordingState.UPLOAD_SUCCESS -> "Upload Success"
-                                AudioRecorderService.RecordingState.UPLOAD_FAILED -> "Upload Failed"
-                                AudioRecorderService.RecordingState.PAUSED -> "Paused"
-                                else -> ""
-                            },
-                            debugInfo = "Service state: $state"
-                        )
-                    }
+                    Log.d(TAG, "Service state updated: $state")
+                    _uiStateFlow.value = _uiStateFlow.value.copy(
+                        isRecording = state == AudioRecorderService.RecordingState.RECORDING || 
+                                     state == AudioRecorderService.RecordingState.PAUSED,
+                        isPaused = state == AudioRecorderService.RecordingState.PAUSED,
+                        uploadStatus = when (state) {
+                            AudioRecorderService.RecordingState.UPLOADING -> "Uploading..."
+                            AudioRecorderService.RecordingState.UPLOAD_SUCCESS -> "Upload Success"
+                            AudioRecorderService.RecordingState.UPLOAD_FAILED -> "Upload Failed"
+                            else -> ""
+                        }
+                    )
                 }
             } catch (e: Exception) {
                 // Only log the error if it's not a standard cancellation
                 if (e !is kotlinx.coroutines.CancellationException) {
                     Log.e(TAG, "Error collecting state", e)
-                    if (isActive) {
-                        _uiStateFlow.value = _uiStateFlow.value.copy(
-                            errorMessage = "Error tracking state: ${e.message}"
-                        )
-                    }
-                }
-            }
-        }
-    }
-    
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        Log.d(TAG, "onCreate called")
-        
-        setContent {
-            WearNoteTheme {
-                Box(modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.DarkGray)
-                ) {
-                    AppContent()
-                }
-            }
-        }
-        
-        // Request permissions first, then start recording service
-        checkAndRequestPermissions()
-    }
-    
-    @Composable
-    fun AppContent() {
-        val state by _uiStateFlow.collectAsState()
-        
-        // Only log debug info, don't display it on the UI
-        DisposableEffect(state) {
-            Log.d(TAG, "UI State: isRecording=${state.isRecording}, " +
-                   "uploadStatus=${state.uploadStatus}, errorMsg=${state.errorMessage}")
-            onDispose {}
-        }
-        
-        RecordingScreen(
-            modifier = Modifier.fillMaxSize(),
-            isRecording = state.isRecording,
-            uploadStatus = state.uploadStatus,
-            errorMessage = state.errorMessage,
-            debugInfo = state.debugInfo,
-            onStopRecording = {
-                Log.d(TAG, "Stop recording requested")
-                service?.stopRecording() ?: run {
-                    Log.e(TAG, "Cannot stop - service is null")
                     _uiStateFlow.value = _uiStateFlow.value.copy(
-                        errorMessage = "Service unavailable"
-                    )
-                }
-            },
-            onPauseRecording = {
-                Log.d(TAG, "Pause recording requested")
-                service?.pauseRecording() ?: run {
-                    Log.e(TAG, "Cannot pause - service is null")
-                    _uiStateFlow.value = _uiStateFlow.value.copy(
-                        errorMessage = "Service unavailable"
-                    )
-                }
-            },
-            onResumeRecording = {
-                Log.d(TAG, "Resume recording requested")
-                service?.resumeRecording() ?: run {
-                    Log.e(TAG, "Cannot resume - service is null")
-                    _uiStateFlow.value = _uiStateFlow.value.copy(
-                        errorMessage = "Service unavailable"
+                        errorMessage = "Error tracking state: ${e.message}"
                     )
                 }
             }
-        )
+        }
     }
 
     private fun checkAndRequestPermissions() {
@@ -227,21 +254,45 @@ class MainActivity : ComponentActivity() {
     
     private fun startRecordingService() {
         try {
-            Log.d(TAG, "Starting and binding to recording service")
+            Log.d(TAG, "Starting recording service")
             val intent = Intent(this, AudioRecorderService::class.java)
-            
-            // Start as foreground service to keep it running in background
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
-            
-            // Bind to the service
+            startForegroundService(intent)
             bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+            _uiStateFlow.value = _uiStateFlow.value.copy(
+                debugInfo = "Starting service..."
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting recording service", e)
+            Log.e(TAG, "Error starting service", e)
+            _uiStateFlow.value = _uiStateFlow.value.copy(
+                errorMessage = "Service start error: ${e.message}"
+            )
         }
+    }
+
+    @Composable
+    fun AppContent() {
+        val state by uiStateFlow.collectAsState()
+        
+        RecordingScreen(
+            modifier = Modifier.fillMaxSize(),
+            isRecording = state.isRecording,
+            isPaused = state.isPaused,
+            uploadStatus = state.uploadStatus,
+            errorMessage = state.errorMessage,
+            onStopRecording = {
+                Log.d(TAG, "Stop recording requested")
+                service?.stopRecording()
+            },
+            onPauseRecording = {
+                if (state.isPaused) {
+                    Log.d(TAG, "Resume recording requested")
+                    service?.resumeRecording()
+                } else {
+                    Log.d(TAG, "Pause recording requested")
+                    service?.pauseRecording()
+                }
+            }
+        )
     }
 
     override fun onStart() {
@@ -257,10 +308,13 @@ class MainActivity : ComponentActivity() {
         if (bound && service != null) {
             Log.d(TAG, "Service already bound, updating state")
             lifecycleScope.launch {
-                _uiStateFlow.value = _uiStateFlow.value.copy(
-                    isRecording = service?.isRecording() ?: false,
-                    debugInfo = "Resume: recording=${service?.isRecording()}"
-                )
+                service?.recordingState?.value?.let { state ->
+                    _uiStateFlow.value = _uiStateFlow.value.copy(
+                        isRecording = state == AudioRecorderService.RecordingState.RECORDING || 
+                                     state == AudioRecorderService.RecordingState.PAUSED,
+                        isPaused = state == AudioRecorderService.RecordingState.PAUSED
+                    )
+                }
             }
         }
     }
@@ -268,7 +322,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         Log.d(TAG, "onStop called")
-        // Cancel any active flows to prevent crashes when the activity is stopped
+        // Use the correct method to cancel coroutines
         lifecycleScope.coroutineContext.cancelChildren()
         
         if (bound) {
@@ -276,15 +330,9 @@ class MainActivity : ComponentActivity() {
             bound = false
         }
     }
-    
+
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "onDestroy called - service should continue running in background")
-        
-        // Unbind but don't stop the service
-        if (bound) {
-            unbindService(serviceConnection)
-            bound = false
-        }
     }
 }

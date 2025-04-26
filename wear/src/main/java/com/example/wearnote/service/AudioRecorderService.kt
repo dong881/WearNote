@@ -121,9 +121,9 @@ class AudioRecorderService : Service() {
         
         recordingJob = serviceScope.launch {
             try {
-                Log.d(TAG, "Starting recording...")
+                Log.d(TAG, "Starting actual recording...")
                 outputFile = createOutputFile()
-                Log.d(TAG, "Output file path: ${outputFile?.absolutePath}")
+                Log.d(TAG, "Created output file for recording: ${outputFile?.absolutePath}")
                 
                 recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     MediaRecorder(applicationContext)
@@ -142,7 +142,7 @@ class AudioRecorderService : Service() {
                     prepare()
                     start()
                     
-                    Log.d(TAG, "MediaRecorder started successfully")
+                    Log.d(TAG, "MediaRecorder actually started recording")
                     _recordingState.value = RecordingState.RECORDING
                 }
                 
@@ -255,30 +255,88 @@ class AudioRecorderService : Service() {
     private fun uploadRecording(file: File) {
         serviceScope.launch {
             try {
-                Log.d(TAG, "Starting upload process")
+                Log.d(TAG, "Starting real upload process")
                 _recordingState.value = RecordingState.UPLOADING
                 
+                // Save file information in shared preferences for future reference
                 saveFileInfo(file)
                 
+                // Verify file exists and has content
+                if (!file.exists() || file.length() == 0L) {
+                    Log.e(TAG, "Recording file doesn't exist or is empty: ${file.absolutePath}")
+                    _recordingState.value = RecordingState.UPLOAD_FAILED
+                    return@launch
+                }
+                
+                Log.d(TAG, "Confirmed recording file exists with size: ${file.length()} bytes")
+                
+                // Upload to Google Drive - NO SIMULATION
                 val fileId = driveApiClient.uploadFileToDrive(file)
                 
                 if (fileId != null) {
-                    Log.d(TAG, "File successfully uploaded to Drive, ID: $fileId")
+                    Log.d(TAG, "File actually uploaded to Drive, ID: $fileId")
                     
+                    // Send to external server - NO SIMULATION
                     try {
                         val serverResult = externalServerClient.sendFileIdToServer(fileId)
                         
                         if (serverResult) {
                             Log.d(TAG, "File ID successfully sent to server")
+                            _recordingState.value = RecordingState.UPLOAD_SUCCESS
                         } else {
-                            Log.e(TAG, "Failed to send file ID to server, but Drive upload was successful")
+                            Log.e(TAG, "Failed to send file ID to server")
+                            _recordingState.value = RecordingState.UPLOAD_FAILED
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error sending to server, but Drive upload was successful", e)
+                        Log.e(TAG, "Error sending to server", e)
+                        _recordingState.value = RecordingState.UPLOAD_FAILED
                     }
                     
-                    _recordingState.value = RecordingState.UPLOAD_SUCCESS
+                    // Keep success/failure message visible for a moment then stop
+                    delay(2000)
+                    stopSelf()
                     
+                } else {
+                    Log.e(TAG, "Failed to upload to Google Drive")
+                    _recordingState.value = RecordingState.UPLOAD_FAILED
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during upload process", e)
+                _recordingState.value = RecordingState.UPLOAD_FAILED
+            }
+        }
+    }
+
+    fun resumeUpload(file: File) {
+        serviceScope.launch {
+            try {
+                Log.d(TAG, "Resuming upload after authentication")
+                _recordingState.value = RecordingState.UPLOADING
+                
+                // Upload to Google Drive
+                val fileId = driveApiClient.uploadFileToDrive(file)
+                
+                if (fileId != null) {
+                    Log.d(TAG, "File actually uploaded to Drive, ID: $fileId")
+                    
+                    // Send to external server
+                    try {
+                        val serverResult = externalServerClient.sendFileIdToServer(fileId)
+                        
+                        if (serverResult) {
+                            Log.d(TAG, "File ID successfully sent to server")
+                            _recordingState.value = RecordingState.UPLOAD_SUCCESS
+                        } else {
+                            Log.e(TAG, "Failed to send file ID to server")
+                            _recordingState.value = RecordingState.UPLOAD_FAILED
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error sending to server", e)
+                        _recordingState.value = RecordingState.UPLOAD_FAILED
+                    }
+                    
+                    // Keep success/failure message visible for a moment
                     delay(2000)
                     stopSelf()
                     

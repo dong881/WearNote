@@ -22,12 +22,13 @@ private const val TAG = "RecordingScreen"
 fun RecordingScreen(
     modifier: Modifier = Modifier,
     isRecording: Boolean,
+    isPaused: Boolean,
     uploadStatus: String,
     errorMessage: String = "",
     debugInfo: String = "",
     onStopRecording: () -> Unit,
-    onPauseRecording: () -> Unit = {}, // Pause function parameter
-    onResumeRecording: () -> Unit = {} // Added resume function parameter
+    onPauseRecording: () -> Unit = {},
+    onResumeRecording: () -> Unit = {}
 ) {
     Box(
         modifier = modifier
@@ -36,20 +37,6 @@ fun RecordingScreen(
         contentAlignment = Alignment.Center
     ) {
         when {
-            isRecording -> {
-                Log.d(TAG, "Showing recording controls")
-                RecordingControls(
-                    onStopRecording = onStopRecording,
-                    onPauseRecording = onPauseRecording
-                )
-            }
-            uploadStatus == "Paused" -> {
-                Log.d(TAG, "Showing paused controls")
-                PausedControls(
-                    onStopRecording = onStopRecording,
-                    onResumeRecording = onResumeRecording
-                )
-            }
             uploadStatus == "Upload Success" -> {
                 Log.d(TAG, "Showing upload success")
                 UploadSuccessScreen()
@@ -66,6 +53,22 @@ fun RecordingScreen(
                 Log.d(TAG, "Showing error: $errorMessage")
                 ErrorScreen(message = errorMessage)
             }
+            isRecording && !isPaused -> {
+                Log.d(TAG, "Showing recording controls")
+                RecordingControls(
+                    onStopRecording = onStopRecording,
+                    onPauseRecording = onPauseRecording,
+                    isPaused = false
+                )
+            }
+            isRecording && isPaused -> {
+                Log.d(TAG, "Showing paused controls")
+                RecordingControls(
+                    onStopRecording = onStopRecording,
+                    onPauseRecording = onResumeRecording,
+                    isPaused = true
+                )
+            }
             else -> {
                 Log.d(TAG, "Showing initializing screen")
                 InitializingScreen()
@@ -77,79 +80,38 @@ fun RecordingScreen(
 @Composable
 fun RecordingControls(
     onStopRecording: () -> Unit,
-    onPauseRecording: () -> Unit = {}
+    onPauseRecording: () -> Unit,
+    isPaused: Boolean
 ) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(20.dp),
         modifier = Modifier.padding(16.dp)
     ) {
-        // Pause button
+        // Pause/Resume button
         Button(
             onClick = { 
-                Log.d(TAG, "Pause button clicked")
+                if (isPaused) {
+                    Log.d(TAG, "Resume button clicked")
+                } else {
+                    Log.d(TAG, "Pause button clicked")
+                }
                 onPauseRecording() 
             },
             modifier = Modifier
                 .size(56.dp)
                 .clip(CircleShape),
             colors = ButtonDefaults.buttonColors(
-                backgroundColor = Color(0xFFFFB74D) // Orange/amber color
+                backgroundColor = if (isPaused) Color(0xFF81C784) else Color(0xFFFFB74D) // Green for resume, amber for pause
             )
         ) {
             Icon(
-                painter = painterResource(id = R.drawable.ic_media_pause),
-                contentDescription = "Pause Recording",
-                tint = Color.White
-            )
-        }
-        
-        // Stop button
-        Button(
-            onClick = { 
-                Log.d(TAG, "Stop button clicked")
-                onStopRecording() 
-            },
-            modifier = Modifier
-                .size(56.dp)
-                .clip(CircleShape),
-            colors = ButtonDefaults.buttonColors(
-                backgroundColor = Color(0xFFE57373) // Light red color
-            )
-        ) {
-            Icon(
-                painter = painterResource(id = R.drawable.ic_media_stop),
-                contentDescription = "Stop Recording",
-                tint = Color.White
-            )
-        }
-    }
-}
-
-@Composable
-fun PausedControls(
-    onStopRecording: () -> Unit,
-    onResumeRecording: () -> Unit
-) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(20.dp),
-        modifier = Modifier.padding(16.dp)
-    ) {
-        // Play button
-        Button(
-            onClick = { 
-                Log.d(TAG, "Play button clicked")
-                onResumeRecording() 
-            },
-            modifier = Modifier
-                .size(56.dp)
-                .clip(CircleShape),
-            colors = ButtonDefaults.buttonColors(
-                backgroundColor = Color(0xFF81C784) // Green color
-            )
-        ) {
-            Icon(
-                painter = painterResource(id = R.drawable.ic_media_play),
-                contentDescription = "Resume Recording",
+                painter = painterResource(
+                    id = if (isPaused) 
+                        R.drawable.ic_media_play 
+                    else 
+                        android.R.drawable.ic_media_pause
+                ),
+                contentDescription = if (isPaused) "Resume Recording" else "Pause Recording",
                 tint = Color.White
             )
         }

@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.WearNote" parent="android:Theme.DeviceDefault">
+        <!-- Add any custom theme attributes here -->
+        <item name="android:colorControlNormal">@android:color/white</item>
+    </style>
+</resources>

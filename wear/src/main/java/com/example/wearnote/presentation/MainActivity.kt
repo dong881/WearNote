@@ -6,64 +6,92 @@
 
 package com.example.wearnote.presentation
 
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Devices
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.wear.compose.material.MaterialTheme
+import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.Text
-import com.example.wearnote.R
+import androidx.wear.compose.material.Text as WearText
 import com.example.wearnote.presentation.theme.WearNoteTheme
+import com.example.wearnote.service.RecorderService
 
 class MainActivity : ComponentActivity() {
+
+    private val permLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        if (perms.values.all { it }) checkFirstLaunch()
+        else finish()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            WearApp("Android")
+        permLauncher.launch(arrayOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.FOREGROUND_SERVICE,
+            Manifest.permission.INTERNET
+        ))
+    }
+
+    private fun checkFirstLaunch() {
+        val prefs = getSharedPreferences("wearnote", Context.MODE_PRIVATE)
+        val first = prefs.getBoolean("first_launch", true)
+        if (first) {
+            prefs.edit().putBoolean("first_launch", false).apply()
+            startRecording()
+            finish()
+        } else {
+            setContent { RecordingControlUI() }
         }
     }
-}
 
-@Composable
-fun WearApp(greetingName: String) {
-    WearNoteTheme {
-        /* If you have enough items in your list, use [ScalingLazyColumn] which is an optimized
-         * version of LazyColumn for wear devices with some added features. For more information,
-         * see d.android.com/wear/compose.
-         */
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colors.background),
-            verticalArrangement = Arrangement.Center
-        ) {
-            Greeting(greetingName = greetingName)
+    private fun startRecording() {
+        Intent(this, RecorderService::class.java).also {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                startForegroundService(it)
+            else startService(it)
         }
     }
-}
 
-@Composable
-fun Greeting(greetingName: String) {
-    Text(
-        modifier = Modifier.fillMaxWidth(),
-        textAlign = TextAlign.Center,
-        color = MaterialTheme.colors.primary,
-        text = stringResource(R.string.hello_world, greetingName)
-    )
-}
+    private fun stopRecording() {
+        stopService(Intent(this, RecorderService::class.java))
+        finish()
+    }
 
-@Preview(device = Devices.WEAR_OS_SMALL_ROUND, showSystemUi = true)
-@Composable
-fun DefaultPreview() {
-    WearApp("Preview Android")
+    @Composable
+    private fun RecordingControlUI() {
+        val isPaused = remember { mutableStateOf(false) }
+        WearNoteTheme {
+            Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Button(onClick = {
+                    val action = if (isPaused.value) "RESUME" else "PAUSE"
+                    Intent(this@MainActivity, RecorderService::class.java).also { it.action = action }.apply { startService(this) }
+                    isPaused.value = !isPaused.value
+                }) {
+                    WearText(if (isPaused.value) "Resume" else "Pause")
+                }
+                Button(onClick = {
+                    Intent(this@MainActivity, RecorderService::class.java).also { it.action = "STOP" }.apply { startService(this) }
+                    stopRecording()
+                }) {
+                    WearText("Stop")
+                }
+            }
+        }
+    }
 }

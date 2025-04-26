@@ -93,13 +93,28 @@ class RecorderService : Service() {
     }
 
     private fun buildNotification(isPaused: Boolean): Notification {
-        // Remove pause/resume actions and only keep stop action for simplicity
+        val pauseResumeIntent = Intent(this, RecorderService::class.java).apply { 
+            action = if (isPaused) ACTION_RESUME_RECORDING else ACTION_PAUSE_RECORDING 
+        }
         val stopIntent = Intent(this, RecorderService::class.java).apply { 
             action = ACTION_STOP_RECORDING 
         }
+        
+        val actionIcon = if (isPaused) 
+            android.R.drawable.ic_media_play 
+        else 
+            android.R.drawable.ic_media_pause
+            
+        val actionText = if (isPaused) "Resume" else "Pause"
+        
         return NotificationCompat.Builder(this, "rec")
-            .setContentTitle("Recording Audio")
+            .setContentTitle("Recording" + if (isPaused) " (Paused)" else "")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .addAction(
+                actionIcon,
+                actionText,
+                PendingIntent.getService(this, 0, pauseResumeIntent, PendingIntent.FLAG_IMMUTABLE)
+            )
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
                 "Stop",
@@ -108,24 +123,47 @@ class RecorderService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Only respond to explicit stop action, otherwise just keep recording
-        if (intent?.action == ACTION_STOP_RECORDING) {
-            if (!isStoppingRequested) {
-                isStoppingRequested = true
-                val recordingDuration = SystemClock.elapsedRealtime() - recordingStartTime
-                Log.d(TAG, "Stop requested. Current duration: $recordingDuration ms")
-                
-                if (recordingDuration < MIN_RECORDING_DURATION_MS) {
-                    Log.d(TAG, "Recording too short, delaying stop to ensure minimum recording time")
-                    CoroutineScope(Dispatchers.Main).launch {
-                        val delayTime = MIN_RECORDING_DURATION_MS - recordingDuration
-                        if (delayTime > 0) {
-                            delay(delayTime)
+        when (intent?.action) {
+            ACTION_PAUSE_RECORDING -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isRecording) {
+                    try {
+                        recorder.pause()
+                        isRecording = false
+                        updateNotification(paused = true)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to pause recording", e)
+                    }
+                }
+            }
+            ACTION_RESUME_RECORDING -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    try {
+                        recorder.resume()
+                        isRecording = true
+                        updateNotification(paused = false)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to resume recording", e)
+                    }
+                }
+            }
+            ACTION_STOP_RECORDING -> {
+                if (!isStoppingRequested) {
+                    isStoppingRequested = true
+                    val recordingDuration = SystemClock.elapsedRealtime() - recordingStartTime
+                    Log.d(TAG, "Stop requested. Current duration: $recordingDuration ms")
+                    
+                    if (recordingDuration < MIN_RECORDING_DURATION_MS) {
+                        Log.d(TAG, "Recording too short, delaying stop to ensure minimum recording time")
+                        CoroutineScope(Dispatchers.Main).launch {
+                            val delayTime = MIN_RECORDING_DURATION_MS - recordingDuration
+                            if (delayTime > 0) {
+                                delay(delayTime)
+                            }
+                            stopRecording()
                         }
+                    } else {
                         stopRecording()
                     }
-                } else {
-                    stopRecording()
                 }
             }
         }

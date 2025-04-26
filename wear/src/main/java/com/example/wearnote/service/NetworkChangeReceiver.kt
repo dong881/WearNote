@@ -4,19 +4,41 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
-import androidx.core.content.getSystemService
+import android.net.NetworkCapabilities
+import android.os.Build
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class NetworkChangeReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
-        val cm = ctx.getSystemService<ConnectivityManager>() ?: return
-        val info = cm.activeNetworkInfo
-        if (info != null && info.isConnected) {
-            CoroutineScope(Dispatchers.IO).launch {
-                GoogleDriveUploader.processPending(ctx)
+    private val TAG = "NetworkChangeReceiver"
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ConnectivityManager.CONNECTIVITY_ACTION) {
+            if (isNetworkAvailable(context)) {
+                Log.d(TAG, "Network is now available, processing pending uploads")
+                // Try to upload pending files when network becomes available
+                CoroutineScope(Dispatchers.IO).launch {
+                    GoogleDriveUploader.processPending(context)
+                }
             }
+        }
+    }
+    
+    private fun isNetworkAvailable(context: Context): Boolean {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val network = connectivityManager.activeNetwork ?: return false
+            val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+            
+            return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } else {
+            @Suppress("DEPRECATION")
+            val networkInfo = connectivityManager.activeNetworkInfo
+            @Suppress("DEPRECATION")
+            return networkInfo != null && networkInfo.isConnected
         }
     }
 }

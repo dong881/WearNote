@@ -1,8 +1,10 @@
 package com.example.wearnote.drive
 
+import android.content.Context
+
 object DriveConstants {
     // OAuth 相關
-    const val CLIENT_ID = "961715726121-lqm36ao22hs3vm7b1vseidh68suft09e.apps.googleusercontent.com" // 填入您的 GCP Client ID
+    fun getClientId(context: Context): String = context.getString(com.example.wearnote.R.string.google_client_id)
     const val REDIRECT_URI = "com.example.wearnote:/oauth2callback"
     const val AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
     const val TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"

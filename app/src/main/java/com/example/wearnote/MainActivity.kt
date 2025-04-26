@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.launch
 
@@ -20,6 +21,16 @@ class MainActivity : ComponentActivity() {
 
         driveViewModel = ViewModelProvider(this)[DriveViewModel::class.java]
         authManager = AuthManager(this)
+        
+        // Configure sign-in to request the user's ID, email address, and basic profile
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestIdToken(getString(R.string.default_web_client_id))
+            .requestServerAuthCode(getString(R.string.default_web_client_id))
+            .requestEmail()
+            .build()
+            
+        // Build a GoogleSignInClient with the options specified by gso
+        authManager.configureGoogleSignIn(gso)
 
         driveViewModel.isAuthorized.observe(this) { isAuthorized ->
             if (isAuthorized) {
@@ -69,7 +80,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } catch (e: ApiException) {
-                Log.e("MainActivity", "Google sign-in failed", e)
+                Log.e("MainActivity", "Google Sign-In Failed: ${e.statusCode} - ${e.message}")
+                Log.e("MainActivity", "開發者錯誤 (${e.statusCode}) - 表示 CLIENT_ID 或 SHA-1 指紋配置錯誤")
                 showToast("Login failed: ${e.statusCode}")
             }
         }

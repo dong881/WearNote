@@ -42,6 +42,9 @@ object ConfigHelper {
         // 輸出應用包名
         Log.d(TAG, "應用包名: ${context.packageName}")
         
+        // 檢查 CLIENT_ID
+        checkClientId(context)
+        
         // 檢查 SHA-1 證書指紋 (用於診斷 ApiException: 10)
         try {
             val info = context.packageManager.getPackageInfo(
@@ -64,6 +67,9 @@ object ConfigHelper {
         
         // 檢查網絡權限
         checkNetworkPermissions(context)
+        
+        // 檢查 Google Sign-In 配置
+        KeystoreHelper.checkGoogleSignInConfig(context)
         
         return isConfigValid
     }
@@ -101,5 +107,32 @@ object ConfigHelper {
             stringBuilder.setLength(stringBuilder.length - 1) // 移除最後一個冒號
         }
         return stringBuilder.toString()
+    }
+    
+    /**
+     * 檢查 CLIENT_ID 配置
+     */
+    private fun checkClientId(context: Context) {
+        try {
+            // Check if the client ID is in resources
+            val possibleResNames = listOf(
+                "default_web_client_id", "google_client_id", "client_id", "oauth_client_id"
+            )
+            
+            for (name in possibleResNames) {
+                val resId = context.resources.getIdentifier(name, "string", context.packageName)
+                if (resId != 0) {
+                    val clientId = context.getString(resId)
+                    Log.d(TAG, "找到 CLIENT_ID: ${clientId.take(15)}...${clientId.takeLast(15)}")
+                    return
+                }
+            }
+            
+            // If we reach here, we didn't find a client ID
+            Log.w(TAG, "在資源中找不到 CLIENT_ID，請確認您已經正確配置 GoogleSignInOptions")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "檢查 CLIENT_ID 時出錯", e)
+        }
     }
 }

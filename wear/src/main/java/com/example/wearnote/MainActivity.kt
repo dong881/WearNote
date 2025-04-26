@@ -28,6 +28,7 @@ import androidx.core.content.ContextCompat
 import androidx.wear.compose.material.*
 import com.example.wearnote.service.RecorderService
 import com.example.wearnote.auth.ConfigHelper
+import com.example.wearnote.util.KeystoreHelper
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
@@ -286,6 +287,9 @@ class MainActivity : ComponentActivity() {
                     Log.e(TAG, "開發者錯誤 (10) - 表示 CLIENT_ID 或 SHA-1 指紋配置錯誤")
                     // 輸出診斷資訊
                     ConfigHelper.checkDeveloperConfiguration(this)
+                    // Add more detailed keystore information
+                    KeystoreHelper.printKeystoreDebugInfo(this)
+                    KeystoreHelper.logShaFixInstructions()
                     showErrorMessage("登入失敗: 開發者配置錯誤，請檢查 Logcat 獲取詳細資訊")
                 }
                 CommonStatusCodes.NETWORK_ERROR -> {

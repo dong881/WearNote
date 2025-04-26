@@ -1,16 +1,10 @@
 package com.example.wearnote.network
 
-import android.accounts.Account
 import android.accounts.AccountManager
-import android.app.Activity
 import android.content.Context
-import android.content.Intent
 import android.util.Log
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.Scope
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.FileContent
@@ -22,7 +16,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.io.IOException
 import java.util.Collections
 
 class DriveApiClient(private val context: Context) {
@@ -31,44 +24,92 @@ class DriveApiClient(private val context: Context) {
         private const val TAG = "DriveApiClient"
         private const val AUDIO_MIME_TYPE = "audio/mp4"
         
-        // Store the current pending upload file for when auth is complete
-        private var pendingUploadFile: File? = null
-        private var authRequested = false
+        // Define WEB_CLIENT_ID - this is critical for OAuth flow on WearOS
+        private const val WEB_CLIENT_ID = "your-web-client-id.apps.googleusercontent.com"
     }
 
-    suspend fun uploadFileToDrive(file: java.io.File): String? = withContext(Dispatchers.IO) {
+    // Store pending upload file
+    private var pendingUploadFile: File? = null
+
+    // Add a proper authentication check method
+    fun checkGoogleSignInAccount(context: Context): GoogleSignInAccount? {
         try {
-            Log.d(TAG, "Starting actual Drive upload process for file: ${file.absolutePath}")
+            // Get all available Google accounts first
+            val am = AccountManager.get(context)
+            val accounts = am.getAccountsByType("com.google")
             
-            // Create a local backup copy in a more accessible location
+            Log.d(TAG, "Found ${accounts.size} Google accounts")
+            accounts.forEach { account ->
+                Log.d(TAG, "Available Google account: ${account.name}")
+            }
+            
+            // Try to get last signed in account
+            val signInAccount = GoogleSignIn.getLastSignedInAccount(context)
+            
+            if (signInAccount != null) {
+                Log.d(TAG, "Found signed in account: ${signInAccount.email}")
+                
+                // Check if we have the Drive scope
+                val hasDriveScope = GoogleSignIn.hasPermissions(
+                    signInAccount,
+                    Scope(DriveScopes.DRIVE_FILE)
+                )
+                
+                Log.d(TAG, "Account has Drive scope: $hasDriveScope")
+                return if (hasDriveScope) signInAccount else null
+            } else {
+                Log.d(TAG, "No signed in Google account found")
+                
+                // If we have accounts but no signed in account, recommend signing in
+                if (accounts.isNotEmpty()) {
+                    Log.d(TAG, "User should sign in with one of the available accounts")
+                } else {
+                    Log.d(TAG, "No Google accounts on device")
+                }
+                
+                return null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking Google sign-in: ${e.message}", e)
+            return null
+        }
+    }
+
+    // Update the needsDrivePermission method
+    fun needsDrivePermission(): Boolean {
+        val account = checkGoogleSignInAccount(context)
+        return account == null
+    }
+
+    // Enhance the uploadFileToDrive method with better logging
+    suspend fun uploadFileToDrive(file: File): String? = withContext(Dispatchers.IO) {
+        try {
+            Log.d(TAG, "Starting Drive upload for file: ${file.absolutePath}")
+            
+            // Create a backup copy
             val backupFile = createBackupFile(file)
             Log.d(TAG, "Created backup file at: ${backupFile?.absolutePath}")
             
-            // Verify file exists and has content
-            if (!file.exists() || file.length() == 0L) {
-                Log.e(TAG, "File doesn't exist or is empty: ${file.absolutePath}")
-                return@withContext null
-            }
-            
-            // Store as the current pending upload in case we need to request auth
+            // Store as pending upload
             pendingUploadFile = file
             
-            // Check if we have Google account permission already
+            // Check Google sign-in status
             val account = GoogleSignIn.getLastSignedInAccount(context)
-            
             if (account == null) {
-                Log.d(TAG, "No Google account signed in - requesting auth")
-                // We need to request sign-in from the main activity
-                authRequested = true
-                
-                // For now, we can't continue - main activity will need to handle this
-                Log.e(TAG, "Authentication needed - please grant Drive access")
+                Log.d(TAG, "No Google account - can't upload to Drive")
                 return@withContext null
             }
             
-            Log.d(TAG, "Using Google account: ${account.email}")
+            // Check if we have Drive scope permission
+            val hasDriveScope = GoogleSignIn.hasPermissions(account, Scope(DriveScopes.DRIVE_FILE))
+            if (!hasDriveScope) {
+                Log.d(TAG, "Missing Drive permission for account: ${account.email}")
+                return@withContext null
+            }
             
-            // Use the account to create a credential
+            Log.d(TAG, "Uploading with account: ${account.email}")
+            
+            // Create credential from the signed in account
             val credential = GoogleAccountCredential.usingOAuth2(
                 context,
                 Collections.singleton(DriveScopes.DRIVE_FILE)
@@ -83,25 +124,23 @@ class DriveApiClient(private val context: Context) {
                 .setApplicationName("WearNote")
                 .build()
             
-            Log.d(TAG, "Drive service initialized successfully")
-            
             // Create file metadata
             val fileMetadata = com.google.api.services.drive.model.File().apply {
                 name = file.name
                 mimeType = AUDIO_MIME_TYPE
             }
             
-            // Upload file content
+            // Upload content
             val mediaContent = FileContent(AUDIO_MIME_TYPE, file)
             
-            Log.d(TAG, "Starting Drive API upload request for file: ${file.name} (${file.length()} bytes)")
+            Log.d(TAG, "Executing Drive API upload")
             
-            // Execute the upload
+            // Execute upload
             val uploadedFile = service.files().create(fileMetadata, mediaContent)
-                .setFields("id, name, size, mimeType")
+                .setFields("id, name")
                 .execute()
             
-            Log.d(TAG, "Upload successful! ID=${uploadedFile.id}, Name=${uploadedFile.name}")
+            Log.d(TAG, "Drive upload successful! ID=${uploadedFile.id}")
             return@withContext uploadedFile.id
             
         } catch (e: Exception) {
@@ -110,22 +149,10 @@ class DriveApiClient(private val context: Context) {
         }
     }
     
-    // For the Activity to check if auth is needed
-    fun isAuthenticationRequested(): Boolean {
-        return authRequested
-    }
-    
-    // Reset auth request flag
-    fun resetAuthRequest() {
-        authRequested = false
-    }
-    
-    // For the Activity to check if there's a pending upload
     fun getPendingUploadFile(): File? {
         return pendingUploadFile
     }
     
-    // Create a backup copy of the file in an accessible location
     private fun createBackupFile(sourceFile: File): File? {
         try {
             // Create a backup in a more accessible directory

@@ -11,6 +11,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.*
@@ -25,10 +26,9 @@ fun RecordingScreen(
     isPaused: Boolean,
     uploadStatus: String,
     errorMessage: String = "",
-    debugInfo: String = "",
     onStopRecording: () -> Unit,
     onPauseRecording: () -> Unit = {},
-    onResumeRecording: () -> Unit = {}
+    onRequestSignIn: () -> Unit = {} // Add sign-in callback
 ) {
     Box(
         modifier = modifier
@@ -37,22 +37,6 @@ fun RecordingScreen(
         contentAlignment = Alignment.Center
     ) {
         when {
-            uploadStatus == "Upload Success" -> {
-                Log.d(TAG, "Showing upload success")
-                UploadSuccessScreen()
-            }
-            uploadStatus == "Upload Failed" -> {
-                Log.d(TAG, "Showing upload failed")
-                UploadFailedScreen()
-            }
-            uploadStatus == "Uploading..." -> {
-                Log.d(TAG, "Showing uploading")
-                UploadingScreen()
-            }
-            errorMessage.isNotEmpty() -> {
-                Log.d(TAG, "Showing error: $errorMessage")
-                ErrorScreen(message = errorMessage)
-            }
             isRecording && !isPaused -> {
                 Log.d(TAG, "Showing recording controls")
                 RecordingControls(
@@ -65,9 +49,25 @@ fun RecordingScreen(
                 Log.d(TAG, "Showing paused controls")
                 RecordingControls(
                     onStopRecording = onStopRecording,
-                    onPauseRecording = onResumeRecording,
+                    onPauseRecording = onPauseRecording,
                     isPaused = true
                 )
+            }
+            uploadStatus == "Upload Success" -> {
+                Log.d(TAG, "Showing upload success")
+                UploadSuccessScreen()
+            }
+            uploadStatus == "Upload Failed" -> {
+                Log.d(TAG, "Showing upload failed")
+                UploadFailedScreen(onRequestSignIn = onRequestSignIn)
+            }
+            uploadStatus == "Uploading..." -> {
+                Log.d(TAG, "Showing uploading")
+                UploadingScreen()
+            }
+            errorMessage.isNotEmpty() -> {
+                Log.d(TAG, "Showing error: $errorMessage")
+                ErrorScreen(message = errorMessage)
             }
             else -> {
                 Log.d(TAG, "Showing initializing screen")
@@ -163,26 +163,58 @@ fun UploadSuccessScreen() {
 }
 
 @Composable
-fun UploadFailedScreen() {
+fun UploadFailedScreen(
+    message: String = "",
+    onRequestSignIn: () -> Unit = {}
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier.padding(16.dp)
     ) {
         Icon(
             painter = painterResource(id = android.R.drawable.ic_dialog_alert),
-            contentDescription = "Failed",
-            tint = Color(0xFFE57373), // Light red
-            modifier = Modifier.size(40.dp)
+            contentDescription = "Error",
+            tint = Color(0xFFFFB74D), // Amber/orange color
+            modifier = Modifier.size(36.dp)
         )
         
         Spacer(modifier = Modifier.height(8.dp))
         
         Text(
-            text = "Failed",
+            text = "Upload Failed",
             color = Color.White,
             fontSize = 16.sp,
             fontWeight = FontWeight.Medium
         )
+        
+        if (message.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(4.dp))
+            
+            Text(
+                text = message,
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 12.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        
+        // Add Google Sign-In button
+        Spacer(modifier = Modifier.height(16.dp))
+        
+        Button(
+            onClick = onRequestSignIn,
+            colors = ButtonDefaults.buttonColors(
+                backgroundColor = Color(0xFF4285F4) // Google Blue
+            ),
+            modifier = Modifier.padding(top = 8.dp)
+        ) {
+            Text(
+                text = "Sign in to Drive",
+                fontSize = 14.sp
+            )
+        }
     }
 }
 
@@ -244,6 +276,24 @@ fun InitializingScreen() {
             modifier = Modifier.size(32.dp),
             indicatorColor = Color.White,
             strokeWidth = 3.dp
+        )
+    }
+}
+
+// Add a standalone sign-in button component
+@Composable
+fun GoogleSignInButton(onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        colors = ButtonDefaults.buttonColors(
+            backgroundColor = Color(0xFF4285F4) // Google blue
+        ),
+        modifier = Modifier.padding(16.dp)
+    ) {
+        Text(
+            text = "Sign in with Google",
+            fontSize = 12.sp,
+            color = Color.White
         )
     }
 }

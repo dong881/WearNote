@@ -10,6 +10,7 @@ import android.content.Intent
 import android.media.MediaRecorder
 import android.os.Binder
 import android.os.Build
+import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -255,10 +257,10 @@ class AudioRecorderService : Service() {
     private fun uploadRecording(file: File) {
         serviceScope.launch {
             try {
-                Log.d(TAG, "Starting real upload process")
+                Log.d(TAG, "Starting upload process")
                 _recordingState.value = RecordingState.UPLOADING
                 
-                // Save file information in shared preferences for future reference
+                // Save file information in shared preferences
                 saveFileInfo(file)
                 
                 // Verify file exists and has content
@@ -268,38 +270,71 @@ class AudioRecorderService : Service() {
                     return@launch
                 }
                 
-                Log.d(TAG, "Confirmed recording file exists with size: ${file.length()} bytes")
+                Log.d(TAG, "Recording file saved: ${file.absolutePath} (${file.length()} bytes)")
                 
-                // Upload to Google Drive - NO SIMULATION
+                // Always create local backup first
+                val backupDir = File(applicationContext.getExternalFilesDir(null), "WearNoteBackups")
+                if (!backupDir.exists()) backupDir.mkdirs()
+                
+                val backupFile = File(backupDir, file.name)
+                
+                try {
+                    file.inputStream().use { input ->
+                        FileOutputStream(backupFile).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    Log.d(TAG, "Created backup at: ${backupFile.absolutePath}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to create backup: ${e.message}")
+                }
+                
+                // Try Drive upload using OAuth user authentication
+                val driveApiClient = DriveApiClient(applicationContext)
                 val fileId = driveApiClient.uploadFileToDrive(file)
                 
                 if (fileId != null) {
-                    Log.d(TAG, "File actually uploaded to Drive, ID: $fileId")
+                    Log.d(TAG, "File successfully uploaded to Drive with OAuth, ID: $fileId")
                     
-                    // Send to external server - NO SIMULATION
+                    // Try to send to external server
                     try {
                         val serverResult = externalServerClient.sendFileIdToServer(fileId)
                         
                         if (serverResult) {
                             Log.d(TAG, "File ID successfully sent to server")
-                            _recordingState.value = RecordingState.UPLOAD_SUCCESS
                         } else {
                             Log.e(TAG, "Failed to send file ID to server")
-                            _recordingState.value = RecordingState.UPLOAD_FAILED
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error sending to server", e)
-                        _recordingState.value = RecordingState.UPLOAD_FAILED
                     }
                     
-                    // Keep success/failure message visible for a moment then stop
-                    delay(2000)
-                    stopSelf()
+                    _recordingState.value = RecordingState.UPLOAD_SUCCESS
                     
                 } else {
-                    Log.e(TAG, "Failed to upload to Google Drive")
-                    _recordingState.value = RecordingState.UPLOAD_FAILED
+                    // Check if authentication is needed
+                    if (driveApiClient.needsDrivePermission()) {
+                        Log.d(TAG, "Drive upload needs user authentication")
+                        
+                        // Save pending upload info
+                        val prefs = applicationContext.getSharedPreferences("WearNotePrefs", Context.MODE_PRIVATE)
+                        prefs.edit().apply {
+                            putString("pending_upload_file", file.absolutePath)
+                            putLong("pending_upload_time", System.currentTimeMillis())
+                            apply()
+                        }
+                        
+                        // Show upload failed status to trigger sign-in button
+                        _recordingState.value = RecordingState.UPLOAD_FAILED
+                    } else {
+                        Log.e(TAG, "Drive upload failed for unknown reason")
+                        _recordingState.value = RecordingState.UPLOAD_FAILED
+                    }
                 }
+                
+                // Keep success message visible for a moment
+                delay(2000)
+                stopSelf()
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error during upload process", e)
@@ -308,47 +343,83 @@ class AudioRecorderService : Service() {
         }
     }
 
+    /**
+     * Resumes uploading a previously recorded file
+     */
     fun resumeUpload(file: File) {
         serviceScope.launch {
             try {
-                Log.d(TAG, "Resuming upload after authentication")
+                Log.d(TAG, "Resuming upload for file: ${file.absolutePath}")
                 _recordingState.value = RecordingState.UPLOADING
                 
-                // Upload to Google Drive
+                if (!file.exists() || file.length() == 0L) {
+                    Log.e(TAG, "Cannot resume upload - file doesn't exist or is empty")
+                    _recordingState.value = RecordingState.UPLOAD_FAILED
+                    return@launch
+                }
+                
+                // Try to upload with fresh authentication
+                val driveApiClient = DriveApiClient(applicationContext)
                 val fileId = driveApiClient.uploadFileToDrive(file)
                 
                 if (fileId != null) {
-                    Log.d(TAG, "File actually uploaded to Drive, ID: $fileId")
+                    Log.d(TAG, "File uploaded to Drive after authentication, ID: $fileId")
                     
-                    // Send to external server
                     try {
                         val serverResult = externalServerClient.sendFileIdToServer(fileId)
-                        
                         if (serverResult) {
-                            Log.d(TAG, "File ID successfully sent to server")
-                            _recordingState.value = RecordingState.UPLOAD_SUCCESS
+                            Log.d(TAG, "File ID sent to server after authentication")
                         } else {
-                            Log.e(TAG, "Failed to send file ID to server")
-                            _recordingState.value = RecordingState.UPLOAD_FAILED
+                            Log.e(TAG, "Failed to send file ID to server after authentication")
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error sending to server", e)
-                        _recordingState.value = RecordingState.UPLOAD_FAILED
+                        Log.e(TAG, "Error sending to server after authentication", e)
                     }
                     
-                    // Keep success/failure message visible for a moment
-                    delay(2000)
-                    stopSelf()
-                    
+                    _recordingState.value = RecordingState.UPLOAD_SUCCESS
                 } else {
-                    Log.e(TAG, "Failed to upload to Google Drive")
+                    Log.e(TAG, "Failed to upload to Drive after authentication")
                     _recordingState.value = RecordingState.UPLOAD_FAILED
                 }
                 
             } catch (e: Exception) {
-                Log.e(TAG, "Error during upload process", e)
+                Log.e(TAG, "Error resuming upload", e)
                 _recordingState.value = RecordingState.UPLOAD_FAILED
             }
+        }
+    }
+
+    private fun createLocalBackupCopy(sourceFile: File): File? {
+        try {
+            // Create directories for various backup locations
+            val backupLocations = listOf(
+                File(applicationContext.getExternalFilesDir(null), "WearNoteBackups"),
+                File(applicationContext.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "WearNote")
+            )
+            
+            backupLocations.forEach { dir -> 
+                if (!dir.exists()) dir.mkdirs()
+            }
+            
+            // Create backup files in each location
+            val backupFiles = backupLocations.map { dir -> 
+                File(dir, sourceFile.name)
+            }
+            
+            // Copy the file to each backup location
+            backupFiles.forEach { backupFile -> 
+                sourceFile.inputStream().use { input -> 
+                    FileOutputStream(backupFile).use { output -> 
+                        input.copyTo(output)
+                    }
+                }
+                Log.d(TAG, "Created backup at: ${backupFile.absolutePath}")
+            }
+            
+            return backupFiles.firstOrNull()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating backup file", e)
+            return null
         }
     }
 

@@ -14,16 +14,18 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.Button
-import androidx.wear.compose.material.Text
-import androidx.wear.compose.material.Text as WearText
+import androidx.wear.compose.material.ButtonDefaults
 import com.example.wearnote.presentation.theme.WearNoteTheme
 import com.example.wearnote.service.RecorderService
 
@@ -50,11 +52,10 @@ class MainActivity : ComponentActivity() {
         val first = prefs.getBoolean("first_launch", true)
         if (first) {
             prefs.edit().putBoolean("first_launch", false).apply()
-            startRecording()
-            finish()
-        } else {
-            setContent { RecordingControlUI() }
         }
+        // Always start recording and show UI
+        startRecording()
+        setContent { RecordingControlUI() }
     }
 
     private fun startRecording() {
@@ -66,30 +67,35 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopRecording() {
-        stopService(Intent(this, RecorderService::class.java))
+        Intent(this, RecorderService::class.java).also { 
+            it.action = RecorderService.ACTION_STOP_RECORDING 
+            startService(it)
+        }
         finish()
     }
 
     @Composable
     private fun RecordingControlUI() {
-        val isPaused = remember { mutableStateOf(false) }
         WearNoteTheme {
             Box(
                 Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Button(onClick = {
-                    val action = if (isPaused.value) "RESUME" else "PAUSE"
-                    Intent(this@MainActivity, RecorderService::class.java).also { it.action = action }.apply { startService(this) }
-                    isPaused.value = !isPaused.value
-                }) {
-                    WearText(if (isPaused.value) "Resume" else "Pause")
-                }
-                Button(onClick = {
-                    Intent(this@MainActivity, RecorderService::class.java).also { it.action = "STOP" }.apply { startService(this) }
-                    stopRecording()
-                }) {
-                    WearText("Stop")
+                Button(
+                    onClick = { stopRecording() },
+                    modifier = Modifier.size(70.dp),
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(
+                        backgroundColor = Color.Red,
+                        contentColor = Color.White
+                    )
+                ) {
+                    // Simple square stop icon
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .background(Color.White)
+                    )
                 }
             }
         }

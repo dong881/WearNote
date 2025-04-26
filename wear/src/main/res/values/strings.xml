@@ -15,4 +15,17 @@
     <string name="upload_success">Upload Successful</string>
     <string name="upload_failed">Upload Failed</string>
     <string name="stop_recording">Stop Recording</string>
+    <string name="action_start">Start Recording</string>
+    <string name="action_stop">Stop Recording</string>
+    <string name="action_pause">Pause Recording</string>
+    <string name="action_resume">Resume Recording</string>
+    <string name="status_idle">Ready to Record</string>
+    <string name="status_recording">Recording...</string>
+    <string name="status_paused">Recording Paused</string>
+    <string name="status_uploading">Uploading...</string>
+    <string name="status_signing_in">Signing In...</string>
+    <string name="sign_in_required">Sign in required</string>
+    <string name="permission_rationale">Microphone permission is required to record audio.</string>
+    <string name="permission_denied">Permission denied. Cannot record audio.</string>
+    <string name="first_launch_recording">Starting initial recording...</string>
 </resources>

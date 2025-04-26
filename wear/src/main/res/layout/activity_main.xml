@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.wear.widget.BoxInsetLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="15dp"
+    app:boxedEdges="all"
+    tools:context=".MainActivity"
+    tools:deviceIds="wear">
+
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="5dp">
+
+        <TextView
+            android:id="@+id/statusTextView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/status_idle"
+            android:textAppearance="@style/TextAppearance.MaterialComponents.Body1"
+            app:layout_constraintTop_toTopOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            android:layout_marginTop="20dp"/>
+
+        <!-- Start Button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/startButton"
+            style="@style/Widget.Material3.Button.IconButton.Filled"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="64dp"
+            android:minHeight="64dp"
+            app:icon="@drawable/ic_mic"
+            app:iconSize="36dp"
+            app:iconPadding="0dp"
+            app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.Material3.Button.Circle"
+            android:contentDescription="@string/action_start"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            android:layout_marginBottom="40dp"
+            android:visibility="visible"/>
+
+        <!-- Recording Controls Group (Initially Hidden) -->
+        <androidx.constraintlayout.widget.Group
+            android:id="@+id/recordingControlsGroup"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:constraint_referenced_ids="stopButton, pauseResumeButton"
+            android:visibility="gone"/>
+
+        <!-- Stop Button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/stopButton"
+            style="@style/Widget.Material3.Button.IconButton.Filled"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="64dp"
+            android:minHeight="64dp"
+            app:icon="@drawable/ic_stop"
+            app:iconSize="36dp"
+            app:iconPadding="0dp"
+            app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.Material3.Button.Circle"
+            android:contentDescription="@string/action_stop"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toStartOf="@+id/pauseResumeButton"
+            app:layout_constraintHorizontal_chainStyle="packed"
+            android:layout_marginBottom="40dp"
+            android:layout_marginEnd="8dp"/>
+
+        <!-- Pause/Resume Button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/pauseResumeButton"
+            style="@style/Widget.Material3.Button.IconButton.Filled"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="64dp"
+            android:minHeight="64dp"
+            app:icon="@drawable/ic_pause"
+            app:iconSize="36dp"
+            app:iconPadding="0dp"
+            app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.Material3.Button.Circle"
+            android:contentDescription="@string/action_pause"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toEndOf="@+id/stopButton"
+            app:layout_constraintEnd_toEndOf="parent"
+            android:layout_marginBottom="40dp"
+            android:layout_marginStart="8dp"/>
+
+        <!-- Google Sign In Button (Optional, can be triggered programmatically) -->
+        <com.google.android.gms.common.SignInButton
+            android:id="@+id/signInButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:layout_constraintTop_toBottomOf="@id/statusTextView"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            android:layout_marginTop="10dp"
+            android:visibility="gone"/>
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
+</androidx.wear.widget.BoxInsetLayout>

@@ -28,4 +28,6 @@
     <string name="permission_rationale">Microphone permission is required to record audio.</string>
     <string name="permission_denied">Permission denied. Cannot record audio.</string>
     <string name="first_launch_recording">Starting initial recording...</string>
+    <string name="google_client_id">961715726121-lqm36ao22hs3vm7b1vseidh68suft09e.apps.googleusercontent.com</string>
+    <string name="default_web_client_id">961715726121-lqm36ao22hs3vm7b1vseidh68suft09e.apps.googleusercontent.com</string>
 </resources>

@@ -7,6 +7,7 @@ import android.media.MediaRecorder
 import android.net.Uri
 import android.os.*
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -38,6 +39,7 @@ class RecorderService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "RecorderServiceChannel"
         private const val NOTIFICATION_ID_AI_PROCESS = 3000
+        private const val DEBUG_TAG = "RecorderServiceDebug" // New debug tag
 
         const val ACTION_START_RECORDING = "com.example.wearnote.ACTION_START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.example.wearnote.ACTION_STOP_RECORDING"
@@ -79,12 +81,33 @@ class RecorderService : Service() {
         super.onCreate()
         createNotificationChannel()
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WearNote::RecorderWakeLock")
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "WearNote::RecorderWakeLock"
+        ).apply {
+            // Ensure the wake lock doesn't time out
+            setReferenceCounted(false)
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         releaseWakeLock()
+
+        // Always release MediaRecorder resource if it exists when service is destroyed
+        if (mediaRecorder != null) {
+            try {
+                if (isRecording) {
+                    mediaRecorder?.stop()
+                }
+                mediaRecorder?.release()
+                mediaRecorder = null
+                Log.d(TAG, "MediaRecorder released in onDestroy")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error releasing MediaRecorder in onDestroy", e)
+            }
+        }
+
         serviceScope.cancel() // Cancel only service scope, not processing scope
         Log.d(TAG, "Service onDestroy")
         Log.d(TAG, "Recorder resources released, job cancelled.")
@@ -92,6 +115,14 @@ class RecorderService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "onStartCommand received: ${intent?.action}")
+
+        // Special handling for foreground service restarts to maintain pause state
+        if (intent?.action == null && isPaused) {
+            Log.d(DEBUG_TAG, "Service restarted without action while paused - maintaining pause state")
+            startForeground(NOTIFICATION_ID, createNotification("Recording paused"))
+            return START_STICKY
+        }
+
         when (intent?.action) {
             ACTION_START_RECORDING -> startRecording()
             ACTION_STOP_RECORDING -> stopRecordingAndUpload()
@@ -130,9 +161,20 @@ class RecorderService : Service() {
             return
         }
 
+        // Don't restart recording if we're in paused state
+        if (isPaused) {
+            Log.d(DEBUG_TAG, "startRecording called while paused - ignoring to maintain pause state")
+            return
+        }
+
         Log.d(TAG, "Starting recording...")
         startForeground(NOTIFICATION_ID, createNotification("Recording..."))
-        wakeLock?.acquire(10 * 60 * 1000L)
+
+        // Acquire wake lock with no timeout to keep recording in background
+        if (wakeLock?.isHeld == false) {
+            wakeLock?.acquire(0) // 0 means acquire indefinitely
+            Log.d(TAG, "Wake lock acquired indefinitely for recording")
+        }
 
         try {
             outputFile = createOutputFile()
@@ -145,25 +187,176 @@ class RecorderService : Service() {
                 MediaRecorder()
             }
 
+            // Configure MediaRecorder with settings known to support pause/resume
             mediaRecorder?.apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
+                // AAC audio in MP4 container is known to support pause
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioEncodingBitRate(128000)
                 setAudioSamplingRate(44100)
                 setOutputFile(outputFile.absolutePath)
-                prepare()
-                start()
+                setMaxDuration(24 * 60 * 60 * 1000) // Set a very long max duration (24 hours)
+
+                // Important: On some devices, setting these audio parameters improves pause support
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    // Set audio channels for better compatibility
+                    setAudioChannels(1) // Mono recording
+                }
+
+                try {
+                    prepare()
+                    start()
+                    isRecording = true
+                    isPaused = false
+                    Log.d(TAG, "Recording started successfully")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start media recorder", e)
+                    throw e
+                }
             }
-            isRecording = true
-            isPaused = false
-            Log.d(TAG, "Recording started")
         } catch (e: IOException) {
             Log.e(TAG, "MediaRecorder prepare() failed", e)
             stopSelf()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start recording", e)
             stopSelf()
+        }
+    }
+
+    private fun pauseRecording() {
+        Log.d(TAG, "Attempting to pause recording: isRecording=$isRecording, isPaused=$isPaused")
+
+        if (!isRecording || isPaused) {
+            Log.w(TAG, "Cannot pause: Not recording or already paused.")
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                // Capture current state before pausing for debugging
+                Log.d(DEBUG_TAG, "About to pause and release MediaRecorder")
+
+                // Actually stop and release the MediaRecorder to free microphone
+                try {
+                    mediaRecorder?.stop()
+                    Log.d(DEBUG_TAG, "MediaRecorder stop() successful")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping mediaRecorder during pause", e)
+                }
+
+                try {
+                    mediaRecorder?.release()
+                    Log.d(DEBUG_TAG, "MediaRecorder release() successful")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error releasing mediaRecorder during pause", e)
+                }
+
+                mediaRecorder = null
+                isPaused = true
+                // Note: isRecording remains true to indicate we're in a paused state
+
+                // Log confirmation message
+                Log.d(DEBUG_TAG, "Recording definitely paused and microphone released")
+                updateNotification("Recording paused")
+
+                // Send a broadcast to update any UI components
+                val intent = Intent(MainActivity.ACTION_RECORDING_STATUS).apply {
+                    putExtra("recording_state", "paused")
+                }
+                sendBroadcast(intent)
+
+                // Extra verification that we're truly paused
+                verifyPausedState()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to pause recording", e)
+                // Try to recover by continuing recording
+                isPaused = false
+                updateNotification("Recording... (pause failed)")
+                Toast.makeText(applicationContext, "Failed to pause recording", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Log.w(TAG, "Pause/Resume not supported on this Android version (requires API 24+)")
+        }
+    }
+
+    private fun verifyPausedState() {
+        if (isPaused) {
+            if (mediaRecorder != null) {
+                Log.e(DEBUG_TAG, "ERROR: MediaRecorder should be null when paused but isn't!")
+                try {
+                    mediaRecorder?.release()
+                    mediaRecorder = null
+                } catch (e: Exception) {
+                    Log.e(DEBUG_TAG, "Failed to release lingering MediaRecorder", e)
+                }
+            } else {
+                Log.d(DEBUG_TAG, "Verified paused state correctly: MediaRecorder is null")
+            }
+        }
+    }
+
+    private fun resumeRecording() {
+        Log.d(TAG, "Attempting to resume recording: isRecording=$isRecording, isPaused=$isPaused")
+
+        if (!isRecording || !isPaused) {
+            Log.w(TAG, "Cannot resume: Not recording or not paused.")
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                // Log action before attempting
+                Log.d(TAG, "About to resume recording by creating new MediaRecorder")
+
+                // Create a new MediaRecorder instance that will append to the existing file
+                mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    MediaRecorder(this)
+                } else {
+                    @Suppress("DEPRECATION")
+                    MediaRecorder()
+                }
+
+                // Setup recorder to append to existing file
+                mediaRecorder?.apply {
+                    setAudioSource(MediaRecorder.AudioSource.MIC)
+                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                    setAudioEncodingBitRate(128000)
+                    setAudioSamplingRate(44100)
+                    setOutputFile(outputFile.absolutePath)
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        setAudioChannels(1) // Mono recording
+                    }
+
+                    try {
+                        prepare()
+                        start()
+                        isPaused = false
+                        Log.d(TAG, "MediaRecorder successfully recreated and started")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to start mediaRecorder during resume", e)
+                        throw e
+                    }
+                }
+
+                updateNotification("Recording...")
+
+                // Send a broadcast to update any UI components
+                val intent = Intent(MainActivity.ACTION_RECORDING_STATUS).apply {
+                    putExtra("recording_state", "recording")
+                }
+                sendBroadcast(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to resume recording", e)
+                // Try to recover
+                isPaused = true
+                updateNotification("Paused (resume failed)")
+                Toast.makeText(applicationContext, "Failed to resume recording", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Log.w(TAG, "Pause/Resume not supported on this Android version (requires API 24+)")
         }
     }
 
@@ -469,44 +662,6 @@ class RecorderService : Service() {
         }
     }
 
-    private fun pauseRecording() {
-        if (!isRecording || isPaused) {
-            Log.w(TAG, "Cannot pause: Not recording or already paused.")
-            return
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try {
-                mediaRecorder?.pause()
-                isPaused = true
-                Log.d(TAG, "Recording paused")
-                updateNotification("Paused")
-            } catch (e: IllegalStateException) {
-                Log.e(TAG, "Failed to pause MediaRecorder", e)
-            }
-        } else {
-            Log.w(TAG, "Pause/Resume not supported on this Android version (requires API 24+)")
-        }
-    }
-
-    private fun resumeRecording() {
-        if (!isRecording || !isPaused) {
-            Log.w(TAG, "Cannot resume: Not recording or not paused.")
-            return
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try {
-                mediaRecorder?.resume()
-                isPaused = false
-                Log.d(TAG, "Recording resumed")
-                updateNotification("Recording...")
-            } catch (e: IllegalStateException) {
-                Log.e(TAG, "Failed to resume MediaRecorder", e)
-            }
-        } else {
-            Log.w(TAG, "Pause/Resume not supported on this Android version (requires API 24+)")
-        }
-    }
-
     private fun discardRecording() {
         if (!isRecording && mediaRecorder == null) {
             Log.w(TAG, "No active recording to discard")
@@ -658,8 +813,12 @@ class RecorderService : Service() {
 
     private fun releaseWakeLock() {
         if (wakeLock?.isHeld == true) {
-            wakeLock?.release()
-            Log.d(TAG, "WakeLock released")
+            try {
+                wakeLock?.release()
+                Log.d(TAG, "WakeLock released")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error releasing wake lock", e)
+            }
         }
     }
 }

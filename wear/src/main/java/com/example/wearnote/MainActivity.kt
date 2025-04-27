@@ -289,10 +289,11 @@ class MainActivity : ComponentActivity() {
         Log.d(TAG, "Starting recording")
         Intent(this, RecorderService::class.java).also {
             it.action = RecorderService.ACTION_START_RECORDING
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                startForegroundService(it)
-            else 
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(it) // Always use startForegroundService for API 26+
+            } else {
                 startService(it)
+            }
         }
         currentRecordingState = RecordingState.RECORDING
         isRecording.value = true
@@ -306,7 +307,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    
+
     private fun stopRecording() {
         Log.d(TAG, "Stopping recording")
         
@@ -381,6 +382,18 @@ class MainActivity : ComponentActivity() {
             it.action = RecorderService.ACTION_CHECK_UPLOAD_STATUS
             startService(it)
         }
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        // Don't stop the service or recording when app is paused
+        Log.d(TAG, "MainActivity paused, allowing background recording to continue")
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Don't stop the service or recording when app is stopped
+        Log.d(TAG, "MainActivity stopped, allowing background recording to continue")
     }
     
     @Composable
@@ -458,9 +471,9 @@ class MainActivity : ComponentActivity() {
                 
                 // Pause/Resume Button
                 Button(
-                    onClick = { 
-                        isPausedState.value = !isPausedState.value
+                    onClick = {
                         togglePauseResumeRecording(isPausedState.value)
+                        isPausedState.value = !isPausedState.value
                     },
                     modifier = Modifier
                         .size(60.dp)

@@ -87,7 +87,9 @@ class MainActivity : ComponentActivity() {
     // Improved broadcast receiver with more logging
     private val recordingStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            Log.d(TAG, "Received broadcast: ${intent.action}, extras: ${intent.extras}")
+            Log.d(TAG, "***** BROADCAST RECEIVED in MainActivity *****")
+            Log.d(TAG, "Action: ${intent.action}")
+            Log.d(TAG, "Extras: ${intent.extras?.keySet()?.joinToString()}")
             
             if (intent.action == ACTION_RECORDING_STATUS) {
                 val status = intent.getStringExtra(EXTRA_STATUS)
@@ -102,12 +104,16 @@ class MainActivity : ComponentActivity() {
                         fileId.value = id
                         isUploading.value = false
                         isRecording.value = false
+                        isPaused.value = false
+                        elapsedTime.value = 0
+                        currentRecordingState = RecordingState.IDLE
                         
-                        // Show success message briefly then immediately start new recording
-                        Toast.makeText(context, "Upload successful!", Toast.LENGTH_SHORT).show()
-                        
-                        // Start recording immediately without delay
-                        startRecording()
+                        // Show success message and force UI update on main thread
+                        runOnUiThread {
+                            Toast.makeText(context, "Upload successful!", Toast.LENGTH_SHORT).show()
+                            showInitialUI()
+                            Log.d(TAG, "UI updated to initial state after upload")
+                        }
                     }
                     
                     STATUS_RECORDING_DISCARDED -> {
@@ -148,22 +154,22 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        Log.d(TAG, "Registering broadcast receiver")
         // Register broadcast receiver with proper flags
         val filter = IntentFilter(ACTION_RECORDING_STATUS)
         
+        // Fix security exception for Android 13 (API 33) and higher
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            try {
-                registerReceiver(recordingStatusReceiver, filter, RECEIVER_NOT_EXPORTED)
-                Log.d(TAG, "Registered receiver with RECEIVER_NOT_EXPORTED flag")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to register receiver", e)
-                // Fallback to older method if the new one fails
-                registerReceiver(recordingStatusReceiver, filter)
-            }
+            registerReceiver(recordingStatusReceiver, filter, RECEIVER_NOT_EXPORTED)
+            Log.d(TAG, "Registered receiver with RECEIVER_NOT_EXPORTED flag")
         } else {
+            // For older Android versions
             registerReceiver(recordingStatusReceiver, filter)
             Log.d(TAG, "Registered receiver without flags")
         }
+        
+        // Check for ongoing uploads when app starts
+        checkPendingUploads()
         
         // Configure Google Sign-In with Drive API scopes
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
@@ -303,21 +309,22 @@ class MainActivity : ComponentActivity() {
     
     private fun stopRecording() {
         Log.d(TAG, "Stopping recording")
-        isRecording.value = false  // Stop timer immediately
-        isUploading.value = true   // Show uploading UI
+        
+        // Reset state immediately
+        isRecording.value = false  
+        isPaused.value = false
+        currentRecordingState = RecordingState.IDLE
+        
+        // Show initial UI immediately instead of uploading UI
+        showInitialUI()
+        
+        // Show a small notification that upload is in progress
+        Toast.makeText(this, "Uploading in background...", Toast.LENGTH_SHORT).show()
         
         // Make sure we send the stop action and wait for the service to confirm
         Intent(this, RecorderService::class.java).also { 
             it.action = RecorderService.ACTION_STOP_RECORDING
             startService(it)
-        }
-        currentRecordingState = RecordingState.IDLE
-        
-        // Show uploading UI
-        setContent {
-            WearNoteTheme {
-                UploadingUI()
-            }
         }
     }
     
@@ -365,6 +372,14 @@ class MainActivity : ComponentActivity() {
             WearNoteTheme {
                 InitialUI() 
             }
+        }
+    }
+    
+    // Check if there are any pending uploads when app starts
+    private fun checkPendingUploads() {
+        Intent(this, RecorderService::class.java).also {
+            it.action = RecorderService.ACTION_CHECK_UPLOAD_STATUS
+            startService(it)
         }
     }
     

@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
                         // Show success message and force UI update on main thread
                         runOnUiThread {
                             Toast.makeText(context, "Upload successful!", Toast.LENGTH_SHORT).show()
-                            showInitialUI()
+                            showInitialUI(autoStartRecording = false)  // Don't auto-start after upload
                             Log.d(TAG, "UI updated to initial state after upload")
                         }
                     }
@@ -125,7 +125,7 @@ class MainActivity : ComponentActivity() {
                         elapsedTime.value = 0
                         
                         // Show initial UI and reset state
-                        showInitialUI()
+                        showInitialUI(autoStartRecording = false)  // Don't auto-start after discard
                         
                         // Show a message about discarding
                         Toast.makeText(context, "Recording discarded", Toast.LENGTH_SHORT).show()
@@ -138,11 +138,7 @@ class MainActivity : ComponentActivity() {
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
-        if (perms.values.all { it }) {
-            checkGoogleSignIn()
-        } else {
-            finish()
-        }
+        onPermissionsGranted(perms.values.all { it })
     }
     
     private val googleSignInLauncher = registerForActivityResult(
@@ -185,7 +181,52 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.INTERNET
         ))
     }
-    
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+            autoStartRecordingAndGoHome()
+        }
+    }
+
+    private fun onPermissionsGranted(areGranted: Boolean) {
+        if (areGranted) {
+            // Check Google Sign-In and proceed with auto-recording
+            val account = GoogleSignIn.getLastSignedInAccount(this)
+            if (account != null) {
+                createDriveService(account)
+                autoStartRecordingAndGoHome()
+            } else {
+                val signInIntent = googleSignInClient.signInIntent
+                googleSignInLauncher.launch(signInIntent)
+            }
+        } else {
+            Toast.makeText(this, getString(R.string.permission_denied), Toast.LENGTH_LONG).show()
+            finish()
+        }
+    }
+
+    private fun autoStartRecordingAndGoHome() {
+        // Check if already recording
+        if (currentRecordingState != RecordingState.RECORDING && currentRecordingState != RecordingState.PAUSED) {
+            Log.d(TAG, "Auto-starting recording and returning to home")
+            startRecording()
+            
+            // Use a short delay before returning to home to ensure recording starts properly
+            Handler(Looper.getMainLooper()).postDelayed({
+                moveTaskToBack(true) // Return to home screen
+            }, 1000) // 1-second delay
+        } else {
+            Log.d(TAG, "Already recording, showing recording UI")
+            // Already recording, just show the recording UI
+            setContent { 
+                WearNoteTheme {
+                    RecordingControlUI() 
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try {
@@ -216,7 +257,8 @@ class MainActivity : ComponentActivity() {
             Log.d(TAG, "Signed in as: ${account.email}")
             Log.d(TAG, "Drive API access granted")
             
-            checkFirstLaunch()
+            // Auto-start recording and go home after successful sign-in
+            autoStartRecordingAndGoHome()
         } catch (e: ApiException) {
             Log.e(TAG, "Google Sign-In Failed: ${e.statusCode} - ${e.message}")
             when (e.statusCode) {
@@ -317,7 +359,7 @@ class MainActivity : ComponentActivity() {
         currentRecordingState = RecordingState.IDLE
         
         // Show initial UI immediately instead of uploading UI
-        showInitialUI()
+        showInitialUI(autoStartRecording = false)
         
         // Show a small notification that upload is in progress
         Toast.makeText(this, "Uploading in background...", Toast.LENGTH_SHORT).show()
@@ -342,7 +384,7 @@ class MainActivity : ComponentActivity() {
         currentRecordingState = RecordingState.IDLE
         
         // Show initial UI immediately after discarding
-        showInitialUI()
+        showInitialUI(autoStartRecording = false)
     }
     
     private fun togglePauseResumeRecording(isPaused: Boolean) {
@@ -361,17 +403,48 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    private fun showInitialUI() {
+    private fun showInitialUI(autoStartRecording: Boolean = false) {
         // Reset recording state
         isRecording.value = false
         isPaused.value = false
         elapsedTime.value = 0
         currentRecordingState = RecordingState.IDLE
         
+        if (autoStartRecording) {
+            // Start recording automatically and return to home
+            Handler(Looper.getMainLooper()).postDelayed({
+                startRecording()
+                
+                // Return to home screen after a short delay
+                Handler(Looper.getMainLooper()).postDelayed({
+                    moveTaskToBack(true)
+                }, 1000)
+            }, 500)
+        }
+        
         // Show initial UI
         setContent { 
             WearNoteTheme {
                 InitialUI() 
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        
+        if (currentRecordingState == RecordingState.IDLE) {
+            Log.d(TAG, "App resumed while idle, auto-starting recording")
+            showInitialUI(autoStartRecording = true)
+        } else {
+            Log.d(TAG, "App resumed while recording/paused, showing appropriate UI")
+            // If already recording, just make sure the UI matches the state
+            if (currentRecordingState == RecordingState.RECORDING || currentRecordingState == RecordingState.PAUSED) {
+                setContent { 
+                    WearNoteTheme {
+                        RecordingControlUI() 
+                    }
+                }
             }
         }
     }

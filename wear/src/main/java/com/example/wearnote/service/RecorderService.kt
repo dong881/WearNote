@@ -4,9 +4,11 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.media.MediaRecorder
+import android.net.Uri
 import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.example.wearnote.MainActivity
 import com.example.wearnote.R
 import com.example.wearnote.util.GoogleDriveUploader
@@ -17,17 +19,23 @@ import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.drive.Drive
 import com.google.api.services.drive.DriveScopes
 import kotlinx.coroutines.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 class RecorderService : Service() {
     companion object {
         private const val TAG = "RecorderService"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "RecorderServiceChannel"
+        private const val NOTIFICATION_ID_AI_PROCESS = 3000
 
         const val ACTION_START_RECORDING = "com.example.wearnote.ACTION_START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.example.wearnote.ACTION_STOP_RECORDING"
@@ -47,6 +55,14 @@ class RecorderService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(120, TimeUnit.SECONDS)  // 2 minutes for connection
+        .readTimeout(300, TimeUnit.SECONDS)     // 5 minutes for response reading
+        .writeTimeout(60, TimeUnit.SECONDS)     // 1 minute for request writing
+        .build()
+
+    private val API_URL = "http://140.118.123.107:5000/process"
 
     override fun onCreate() {
         super.onCreate()
@@ -203,6 +219,10 @@ class RecorderService : Service() {
                 } else {
                     Log.i(TAG, "Upload successful! Google Drive File ID: $fileId")
                     pendingUploads[file.name] = true
+
+                    // Send HTTP POST to the AI processing endpoint
+                    sendToAIProcessing(fileId)
+
                     updateNotification("Upload successful!")
                     notifyUploadComplete(fileId)
                 }
@@ -222,6 +242,142 @@ class RecorderService : Service() {
         if (pendingUploads.values.all { it }) {
             stopSelf()
         }
+    }
+
+    private fun sendToAIProcessing(fileId: String) {
+        try {
+            // Show notification that AI analysis has begun
+            val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_mic) // Changed from ic_notification to ic_mic
+                .setContentTitle("AI Analysis")
+                .setContentText("Starting AI analysis of your recording...")
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+
+            val notificationManager = NotificationManagerCompat.from(this)
+            notificationManager.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
+
+            // Create JSON payload
+            val jsonObject = JSONObject()
+            jsonObject.put("file_id", fileId)
+            val requestBody = jsonObject.toString().toRequestBody("application/json".toMediaType())
+
+            // Create and execute request
+            val request = Request.Builder()
+                .url(API_URL)
+                .post(requestBody)
+                .build()
+
+            client.newCall(request).enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    Log.e(TAG, "Failed to send file for AI processing", e)
+                    updateNotificationForAIProcessingFailure("Connection error: ${e.message}")
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    try {
+                        val responseBody = response.body?.string()
+                        if (response.isSuccessful && responseBody != null) {
+                            // Success case
+                            val jsonResponse = JSONObject(responseBody)
+                            if (jsonResponse.optBoolean("success", false)) {
+                                val notionPageId = jsonResponse.optString("notion_page_id", "")
+                                val notionPageUrl = jsonResponse.optString("notion_page_url", "")
+                                val title = jsonResponse.optString("title", "Untitled Meeting")
+                                val summary = jsonResponse.optString("summary", "No summary available")
+
+                                val todos = mutableListOf<String>()
+                                val todosArray = jsonResponse.optJSONArray("todos")
+                                if (todosArray != null) {
+                                    for (i in 0 until todosArray.length()) {
+                                        todos.add(todosArray.getString(i))
+                                    }
+                                }
+
+                                Log.i(TAG, "AI processing completed successfully!")
+                                Log.i(TAG, "Title: $title")
+                                Log.i(TAG, "Summary: ${summary.take(100)}...")
+                                Log.i(TAG, "Notion URL: $notionPageUrl")
+                                Log.i(TAG, "Found ${todos.size} todos")
+
+                                updateNotificationForAIProcessingSuccess(title, summary, notionPageUrl)
+                            } else {
+                                val errorMessage = jsonResponse.optString("error", "Unknown error occurred")
+                                Log.e(TAG, "AI processing API returned error: $errorMessage")
+                                updateNotificationForAIProcessingFailure("Error: $errorMessage")
+                            }
+                        } else {
+                            when (response.code) {
+                                500 -> {
+                                    Log.e(TAG, "AI processing server encountered an internal error (500)")
+                                    Log.e(TAG, "Server response: ${responseBody ?: "No response body"}")
+                                    var errorDetails = "The AI processing server encountered an internal error."
+                                    try {
+                                        if (responseBody != null) {
+                                            val jsonError = JSONObject(responseBody)
+                                            if (jsonError.has("error")) {
+                                                errorDetails += "\n\nError details: ${jsonError.getString("error")}"
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "Could not parse error response", e)
+                                    }
+                                    updateNotificationForAIProcessingFailure("Server Error: $errorDetails")
+                                }
+                                else -> {
+                                    Log.e(TAG, "AI processing request failed with code: ${response.code}")
+                                    updateNotificationForAIProcessingFailure("Server error (${response.code})")
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error parsing AI processing response", e)
+                        updateNotificationForAIProcessingFailure("Error parsing response: ${e.message}")
+                    } finally {
+                        response.close()
+                    }
+                }
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending file for AI processing", e)
+            updateNotificationForAIProcessingFailure("Error: ${e.message}")
+        }
+    }
+
+    private fun updateNotificationForAIProcessingSuccess(title: String, summary: String, notionUrl: String) {
+        val notionIntent = Intent(Intent.ACTION_VIEW, Uri.parse(notionUrl))
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            notionIntent,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_mic) // Changed from ic_notification to ic_mic
+            .setContentTitle("Meeting Notes: $title")
+            .setContentText("Tap to view your notes in Notion")
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText("Summary: ${summary.take(200)}${if (summary.length > 200) "..." else ""}\n\nTap to open in Notion.")
+            )
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+
+        val notificationManager = NotificationManagerCompat.from(this)
+        notificationManager.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
+    }
+
+    private fun updateNotificationForAIProcessingFailure(errorMessage: String) {
+        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_mic) // Changed from ic_notification to ic_mic
+            .setContentTitle("AI Analysis Failed")
+            .setContentText(errorMessage)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(errorMessage))
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+
+        val notificationManager = NotificationManagerCompat.from(this)
+        notificationManager.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
     }
 
     private fun notifyUploadComplete(fileId: String?) {

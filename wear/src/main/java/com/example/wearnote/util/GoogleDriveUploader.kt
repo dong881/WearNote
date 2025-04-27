@@ -8,6 +8,7 @@ import android.util.Log
 import com.google.api.client.http.FileContent
 import com.google.api.services.drive.Drive
 import com.google.api.services.drive.model.File
+import com.google.api.services.drive.model.Permission
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
@@ -59,6 +60,25 @@ object GoogleDriveUploader {
 
             val fileId = uploadedFile.id
             Log.i(TAG, "File uploaded successfully! ID: $fileId, Link: ${uploadedFile.webViewLink}")
+
+            // Add permission to make the file accessible to anyone with the link
+            if (fileId != null) {
+                try {
+                    // Create a permission for anyone with the link to view the file
+                    val permission = Permission()
+                        .setType("anyone")
+                        .setRole("reader")
+
+                    driveService.permissions().create(fileId, permission)
+                        .setFields("id")
+                        .execute()
+
+                    Log.i(TAG, "Set file permission to anyone with link: $fileId")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error setting file permissions: ${e.message}")
+                    // Don't fail the upload if just permission setting fails
+                }
+            }
             
             return@withContext fileId
         } catch (e: IOException) {

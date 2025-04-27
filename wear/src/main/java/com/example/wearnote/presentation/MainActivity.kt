@@ -43,22 +43,95 @@ import com.example.wearnote.presentation.theme.WearNoteTheme
 import com.example.wearnote.service.RecorderService
 import kotlinx.coroutines.delay
 
+// Google Sign-In imports
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.Scope
+
+// Google Drive API imports
+import com.google.api.client.http.javanet.NetHttpTransport
+import com.google.api.client.json.gson.GsonFactory
+import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.services.drive.Drive
+import com.google.api.services.drive.DriveScopes
+
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        private const val RC_SIGN_IN = 9001
+    }
+
+    private lateinit var googleSignInClient: GoogleSignInClient
+    private var driveService: Drive? = null
 
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
-        if (perms.values.all { it }) checkFirstLaunch()
+        if (perms.values.all { it }) checkGoogleSignIn()
         else finish()
+    }
+
+    private val signInLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        handleSignInResult(result.data)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Configure Google Sign-In with Android client ID only
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestIdToken(getString(R.string.android_client_id))
+            .requestServerAuthCode(getString(R.string.android_client_id))
+            .build()
+        googleSignInClient = GoogleSignIn.getClient(this, gso)
+        
+        // Request permissions
         permLauncher.launch(arrayOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.FOREGROUND_SERVICE,
             Manifest.permission.INTERNET
         ))
+    }
+
+    private fun checkGoogleSignIn() {
+        val account = GoogleSignIn.getLastSignedInAccount(this)
+        if (account != null) {
+            createDriveService(account)
+            checkFirstLaunch()
+        } else {
+            val signInIntent = googleSignInClient.signInIntent
+            signInLauncher.launch(signInIntent)
+        }
+    }
+
+    private fun handleSignInResult(data: Intent?) {
+        try {
+            val task = GoogleSignIn.getSignedInAccountFromIntent(data)
+            val account = task.getResult(ApiException::class.java)
+            createDriveService(account)
+            checkFirstLaunch()
+        } catch (e: ApiException) {
+            // Handle sign-in failure
+            finish()
+        }
+    }
+
+    private fun createDriveService(account: GoogleSignInAccount) {
+        val credential = GoogleAccountCredential.usingOAuth2(
+            this, listOf(DriveScopes.DRIVE_FILE)
+        )
+        credential.selectedAccount = account.account
+        driveService = Drive.Builder(
+            NetHttpTransport(),
+            GsonFactory.getDefaultInstance(),
+            credential
+        ).setApplicationName(getString(R.string.app_name)).build()
     }
 
     private fun checkFirstLaunch() {

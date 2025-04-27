@@ -221,7 +221,8 @@ class RecorderService : Service() {
                     pendingUploads[file.name] = true
 
                     // Send HTTP POST to the AI processing endpoint
-                    sendToAIProcessing(fileId)
+                    // Pass the local file reference to allow deletion after successful processing
+                    sendToAIProcessing(fileId, file)
 
                     updateNotification("Upload successful!")
                     notifyUploadComplete(fileId)
@@ -244,11 +245,11 @@ class RecorderService : Service() {
         }
     }
 
-    private fun sendToAIProcessing(fileId: String) {
+    private fun sendToAIProcessing(fileId: String, localFile: File) {
         try {
             // Show notification that AI analysis has begun
             val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_mic) // Changed from ic_notification to ic_mic
+                .setSmallIcon(R.drawable.ic_mic)
                 .setContentTitle("AI Analysis")
                 .setContentText("Starting AI analysis of your recording...")
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
@@ -267,76 +268,118 @@ class RecorderService : Service() {
                 .post(requestBody)
                 .build()
 
-            client.newCall(request).enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    Log.e(TAG, "Failed to send file for AI processing", e)
-                    updateNotificationForAIProcessingFailure("Connection error: ${e.message}")
-                }
+            // Use serviceScope to ensure this continues even if UI is destroyed
+            serviceScope.launch(Dispatchers.IO) {
+                try {
+                    // Create a new OkHttpClient with even longer timeout for this specific request
+                    val processingClient = OkHttpClient.Builder()
+                        .connectTimeout(180, TimeUnit.SECONDS)
+                        .readTimeout(600, TimeUnit.SECONDS)  // 10 minutes timeout for processing
+                        .writeTimeout(60, TimeUnit.SECONDS)
+                        .build()
+                    
+                    // Use synchronous call in background thread instead of async callback
+                    val response = processingClient.newCall(request).execute()
+                    val responseBody = response.body?.string()
+                    
+                    if (response.isSuccessful && responseBody != null) {
+                        val jsonResponse = JSONObject(responseBody)
+                        if (jsonResponse.optBoolean("success", false)) {
+                            val notionPageId = jsonResponse.optString("notion_page_id", "")
+                            val notionPageUrl = jsonResponse.optString("notion_page_url", "")
+                            val title = jsonResponse.optString("title", "Untitled Meeting")
+                            val summary = jsonResponse.optString("summary", "No summary available")
 
-                override fun onResponse(call: Call, response: Response) {
-                    try {
-                        val responseBody = response.body?.string()
-                        if (response.isSuccessful && responseBody != null) {
-                            // Success case
-                            val jsonResponse = JSONObject(responseBody)
-                            if (jsonResponse.optBoolean("success", false)) {
-                                val notionPageId = jsonResponse.optString("notion_page_id", "")
-                                val notionPageUrl = jsonResponse.optString("notion_page_url", "")
-                                val title = jsonResponse.optString("title", "Untitled Meeting")
-                                val summary = jsonResponse.optString("summary", "No summary available")
+                            val todos = mutableListOf<String>()
+                            val todosArray = jsonResponse.optJSONArray("todos")
+                            if (todosArray != null) {
+                                for (i in 0 until todosArray.length()) {
+                                    todos.add(todosArray.getString(i))
+                                }
+                            }
 
-                                val todos = mutableListOf<String>()
-                                val todosArray = jsonResponse.optJSONArray("todos")
-                                if (todosArray != null) {
-                                    for (i in 0 until todosArray.length()) {
-                                        todos.add(todosArray.getString(i))
+                            Log.i(TAG, "AI processing completed successfully!")
+                            Log.i(TAG, "Title: $title")
+                            Log.i(TAG, "Summary: ${summary.take(100)}...")
+                            Log.i(TAG, "Notion URL: $notionPageUrl")
+                            Log.i(TAG, "Found ${todos.size} todos")
+
+                            // Delete the local file after successful processing
+                            try {
+                                if (localFile.exists()) {
+                                    if (localFile.delete()) {
+                                        Log.i(TAG, "Local recording file deleted after successful AI processing: ${localFile.absolutePath}")
+                                    } else {
+                                        Log.w(TAG, "Failed to delete local recording file: ${localFile.absolutePath}")
                                     }
                                 }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error while trying to delete local file", e)
+                            }
 
-                                Log.i(TAG, "AI processing completed successfully!")
-                                Log.i(TAG, "Title: $title")
-                                Log.i(TAG, "Summary: ${summary.take(100)}...")
-                                Log.i(TAG, "Notion URL: $notionPageUrl")
-                                Log.i(TAG, "Found ${todos.size} todos")
-
+                            // Ensure notification is shown on the main thread
+                            withContext(Dispatchers.Main) {
                                 updateNotificationForAIProcessingSuccess(title, summary, notionPageUrl)
-                            } else {
-                                val errorMessage = jsonResponse.optString("error", "Unknown error occurred")
-                                Log.e(TAG, "AI processing API returned error: $errorMessage")
-                                updateNotificationForAIProcessingFailure("Error: $errorMessage")
+                                
+                                // Show success notification with vibration
+                                val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                    val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                                    vibratorManager.defaultVibrator
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                                }
+                                
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    vibrator.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    vibrator.vibrate(500)
+                                }
                             }
                         } else {
-                            when (response.code) {
-                                500 -> {
-                                    Log.e(TAG, "AI processing server encountered an internal error (500)")
-                                    Log.e(TAG, "Server response: ${responseBody ?: "No response body"}")
-                                    var errorDetails = "The AI processing server encountered an internal error."
-                                    try {
-                                        if (responseBody != null) {
-                                            val jsonError = JSONObject(responseBody)
-                                            if (jsonError.has("error")) {
-                                                errorDetails += "\n\nError details: ${jsonError.getString("error")}"
-                                            }
+                            val errorMessage = jsonResponse.optString("error", "Unknown error occurred")
+                            Log.e(TAG, "AI processing API returned error: $errorMessage")
+                            withContext(Dispatchers.Main) {
+                                updateNotificationForAIProcessingFailure("Error: $errorMessage")
+                            }
+                        }
+                    } else {
+                        when (response.code) {
+                            500 -> {
+                                Log.e(TAG, "AI processing server encountered an internal error (500)")
+                                Log.e(TAG, "Server response: ${responseBody ?: "No response body"}")
+                                var errorDetails = "The AI processing server encountered an internal error."
+                                try {
+                                    if (responseBody != null) {
+                                        val jsonError = JSONObject(responseBody)
+                                        if (jsonError.has("error")) {
+                                            errorDetails += "\n\nError details: ${jsonError.getString("error")}"
                                         }
-                                    } catch (e: Exception) {
-                                        Log.e(TAG, "Could not parse error response", e)
                                     }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Could not parse error response", e)
+                                }
+                                withContext(Dispatchers.Main) {
                                     updateNotificationForAIProcessingFailure("Server Error: $errorDetails")
                                 }
-                                else -> {
-                                    Log.e(TAG, "AI processing request failed with code: ${response.code}")
+                            }
+                            else -> {
+                                Log.e(TAG, "AI processing request failed with code: ${response.code}")
+                                withContext(Dispatchers.Main) {
                                     updateNotificationForAIProcessingFailure("Server error (${response.code})")
                                 }
                             }
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error parsing AI processing response", e)
-                        updateNotificationForAIProcessingFailure("Error parsing response: ${e.message}")
-                    } finally {
-                        response.close()
+                    }
+                    response.close()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error during AI processing", e)
+                    withContext(Dispatchers.Main) {
+                        updateNotificationForAIProcessingFailure("Error: ${e.message}")
                     }
                 }
-            })
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error sending file for AI processing", e)
             updateNotificationForAIProcessingFailure("Error: ${e.message}")

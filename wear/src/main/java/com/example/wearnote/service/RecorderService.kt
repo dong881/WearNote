@@ -319,6 +319,16 @@ class RecorderService : Service() {
                     isRecording = true
                     isPaused = false
                     Log.d(TAG, "Recording started successfully")
+                    
+                    // Send confirmation broadcast that recording has actually started
+                    Handler(Looper.getMainLooper()).post {
+                        val intent = Intent(MainActivity.ACTION_RECORDING_STATUS).apply {
+                            putExtra(MainActivity.EXTRA_STATUS, MainActivity.STATUS_RECORDING_STARTED)
+                        }
+                        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                        sendBroadcast(intent)
+                        Log.d(TAG, "Broadcast sent: Recording started confirmation")
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start media recorder", e)
                     throw e

@@ -69,6 +69,7 @@ class MainActivity : ComponentActivity() {
         // Add new constants
         const val STATUS_UPLOAD_STARTED = "upload_started"
         const val STATUS_RECORDING_DISCARDED = "recording_discarded"
+        const val STATUS_RECORDING_STARTED = "recording_started"  // New status for recording started confirmation
     }
 
     private enum class RecordingState {
@@ -85,6 +86,8 @@ class MainActivity : ComponentActivity() {
     private val isRecording = mutableStateOf(false)
     private val isUploading = mutableStateOf(false)
     private val fileId = mutableStateOf<String?>(null)
+    private val isRecordingStartConfirmed = mutableStateOf(false)
+    private val isAutoStartInProgress = mutableStateOf(false)
     
     // Improved broadcast receiver with more logging
     private val recordingStatusReceiver = object : BroadcastReceiver() {
@@ -131,6 +134,18 @@ class MainActivity : ComponentActivity() {
                         
                         // Show a message about discarding
                         Toast.makeText(context, "Recording discarded", Toast.LENGTH_SHORT).show()
+                    }
+                    
+                    STATUS_RECORDING_STARTED -> {
+                        Log.d(TAG, "Recording started confirmation received")
+                        isRecordingStartConfirmed.value = true
+                        
+                        // If auto-start is in progress, now we can safely return to home
+                        if (isAutoStartInProgress.value) {
+                            Log.d(TAG, "Auto-start confirmed, returning to home")
+                            moveTaskToBack(true)
+                            isAutoStartInProgress.value = false
+                        }
                     }
                 }
             }
@@ -211,13 +226,23 @@ class MainActivity : ComponentActivity() {
     private fun autoStartRecordingAndGoHome() {
         // Check if already recording
         if (currentRecordingState != RecordingState.RECORDING && currentRecordingState != RecordingState.PAUSED) {
-            Log.d(TAG, "Auto-starting recording and returning to home")
+            Log.d(TAG, "Auto-starting recording and waiting for confirmation")
+            
+            // Reset confirmation flag
+            isRecordingStartConfirmed.value = false
+            isAutoStartInProgress.value = true
+            
+            // Start recording
             startRecording()
             
-            // Use a short delay before returning to home to ensure recording starts properly
+            // Set a longer timeout to wait for confirmation or timeout
             Handler(Looper.getMainLooper()).postDelayed({
-                moveTaskToBack(true) // Return to home screen
-            }, 1000) // 1-second delay
+                if (!isRecordingStartConfirmed.value && isAutoStartInProgress.value) {
+                    Log.d(TAG, "Recording start confirmation timed out, returning to home anyway")
+                    moveTaskToBack(true)
+                    isAutoStartInProgress.value = false
+                }
+            }, 3000) // 3-second timeout
         } else {
             Log.d(TAG, "Already recording, showing recording UI")
             // Already recording, just show the recording UI
@@ -307,13 +332,21 @@ class MainActivity : ComponentActivity() {
     
     private fun checkFirstLaunch() {
         if (!isFirstLaunchDone()) {
+            // Only for first launch
+            Log.d(TAG, "First launch detected")
             handleFirstLaunch()
             markFirstLaunchDone()
+            
+            // Start recording only on first launch
+            startRecording()
+        } else {
+            // For subsequent launches, just show the initial UI
+            Log.d(TAG, "Subsequent launch detected, showing normal UI")
+            showInitialUI(autoStartRecording = false)
         }
-        // Start recording immediately instead of showing initial UI
-        startRecording()
     }
     
+    // Make sure our first launch detection is reliable
     private fun isFirstLaunchDone(): Boolean {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         return prefs.getBoolean(KEY_FIRST_LAUNCH_DONE, false)
@@ -321,9 +354,10 @@ class MainActivity : ComponentActivity() {
     
     private fun markFirstLaunchDone() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(KEY_FIRST_LAUNCH_DONE, true).apply()
+        prefs.edit().putBoolean(KEY_FIRST_LAUNCH_DONE, true).apply() // Use apply() for asynchronous write
+        Log.d(TAG, "First launch flag has been set")
     }
-    
+
     private fun handleFirstLaunch() {
         // First launch actions - could initialize Drive folders, etc.
         Log.d(TAG, "First launch detected")
@@ -434,8 +468,9 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         
         if (currentRecordingState == RecordingState.IDLE) {
-            Log.d(TAG, "App resumed while idle, auto-starting recording")
-            showInitialUI(autoStartRecording = true)
+            Log.d(TAG, "App resumed while idle, checking if we should show initial UI")
+            // Don't auto-start recording on resume, just show appropriate UI
+            showInitialUI(autoStartRecording = false)
         } else {
             Log.d(TAG, "App resumed while recording/paused, showing appropriate UI")
             // If already recording, just make sure the UI matches the state

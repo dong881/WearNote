@@ -9,6 +9,7 @@ import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.example.wearnote.MainActivity
 import com.example.wearnote.R
 import com.example.wearnote.util.GoogleDriveUploader
@@ -29,6 +30,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class RecorderService : Service() {
     companion object {
@@ -46,6 +48,15 @@ class RecorderService : Service() {
         const val ACTION_CHECK_UPLOAD_STATUS = "com.example.wearnote.ACTION_CHECK_UPLOAD_STATUS"
 
         private val pendingUploads = ConcurrentHashMap<String, Boolean>()
+
+        // Create a global processing scope that is not tied to the service lifecycle
+        private val processingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+        // Track active processing jobs
+        private val isProcessingActive = AtomicBoolean(false)
+
+        // This keeps track of files being processed
+        private val processingFiles = ConcurrentHashMap<String, File>()
     }
 
     private var mediaRecorder: MediaRecorder? = null
@@ -74,7 +85,7 @@ class RecorderService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         releaseWakeLock()
-        serviceScope.cancel()
+        serviceScope.cancel() // Cancel only service scope, not processing scope
         Log.d(TAG, "Service onDestroy")
         Log.d(TAG, "Recorder resources released, job cancelled.")
     }
@@ -257,6 +268,10 @@ class RecorderService : Service() {
             val notificationManager = NotificationManagerCompat.from(this)
             notificationManager.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
 
+            // Keep track of the file being processed
+            processingFiles[fileId] = localFile
+            isProcessingActive.set(true)
+
             // Create JSON payload
             val jsonObject = JSONObject()
             jsonObject.put("file_id", fileId)
@@ -268,28 +283,33 @@ class RecorderService : Service() {
                 .post(requestBody)
                 .build()
 
-            // Use serviceScope to ensure this continues even if UI is destroyed
-            serviceScope.launch(Dispatchers.IO) {
+            // Start processing in the global scope that won't be cancelled when service is destroyed
+            processingScope.launch(Dispatchers.IO) {
                 try {
-                    // Create a new OkHttpClient with even longer timeout for this specific request
+                    // Make sure service stays alive during processing
+                    startForeground(NOTIFICATION_ID_AI_PROCESS, createProcessingNotification())
+
+                    // Create a new OkHttpClient with even longer timeout
                     val processingClient = OkHttpClient.Builder()
                         .connectTimeout(180, TimeUnit.SECONDS)
                         .readTimeout(600, TimeUnit.SECONDS)  // 10 minutes timeout for processing
                         .writeTimeout(60, TimeUnit.SECONDS)
                         .build()
-                    
-                    // Use synchronous call in background thread instead of async callback
+
+                    // Execute request synchronously
                     val response = processingClient.newCall(request).execute()
                     val responseBody = response.body?.string()
-                    
+
                     if (response.isSuccessful && responseBody != null) {
                         val jsonResponse = JSONObject(responseBody)
                         if (jsonResponse.optBoolean("success", false)) {
+                            // Success case handling
                             val notionPageId = jsonResponse.optString("notion_page_id", "")
                             val notionPageUrl = jsonResponse.optString("notion_page_url", "")
                             val title = jsonResponse.optString("title", "Untitled Meeting")
                             val summary = jsonResponse.optString("summary", "No summary available")
 
+                            // Extract todos if available
                             val todos = mutableListOf<String>()
                             val todosArray = jsonResponse.optJSONArray("todos")
                             if (todosArray != null) {
@@ -306,121 +326,129 @@ class RecorderService : Service() {
 
                             // Delete the local file after successful processing
                             try {
-                                if (localFile.exists()) {
-                                    if (localFile.delete()) {
-                                        Log.i(TAG, "Local recording file deleted after successful AI processing: ${localFile.absolutePath}")
+                                val fileToDelete = processingFiles.remove(fileId) ?: localFile
+                                if (fileToDelete.exists()) {
+                                    if (fileToDelete.delete()) {
+                                        Log.i(TAG, "Local recording file deleted successfully: ${fileToDelete.absolutePath}")
                                     } else {
-                                        Log.w(TAG, "Failed to delete local recording file: ${localFile.absolutePath}")
+                                        Log.w(TAG, "Failed to delete local recording file: ${fileToDelete.absolutePath}")
                                     }
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error while trying to delete local file", e)
                             }
 
-                            // Ensure notification is shown on the main thread
-                            withContext(Dispatchers.Main) {
-                                updateNotificationForAIProcessingSuccess(title, summary, notionPageUrl)
-                                
-                                // Show success notification with vibration
-                                val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                    val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
-                                    vibratorManager.defaultVibrator
-                                } else {
-                                    @Suppress("DEPRECATION")
-                                    getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                            // Show success notification
+                            try {
+                                val notificationIntent = Intent(Intent.ACTION_VIEW, Uri.parse(notionPageUrl))
+                                val pendingIntent = PendingIntent.getActivity(
+                                    applicationContext,
+                                    0,
+                                    notificationIntent,
+                                    PendingIntent.FLAG_IMMUTABLE
+                                )
+
+                                val successNotification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+                                    .setSmallIcon(R.drawable.ic_mic)
+                                    .setContentTitle("Meeting Notes: $title")
+                                    .setContentText("Tap to view your notes in Notion")
+                                    .setStyle(
+                                        NotificationCompat.BigTextStyle()
+                                            .bigText("Summary: ${summary.take(200)}${if (summary.length > 200) "..." else ""}\n\nTap to open in Notion.")
+                                    )
+                                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                                    .setContentIntent(pendingIntent)
+                                    .setAutoCancel(true)
+                                    .build()
+
+                                val notificationManager = ContextCompat.getSystemService(
+                                    applicationContext,
+                                    NotificationManager::class.java
+                                )
+                                notificationManager?.notify(NOTIFICATION_ID_AI_PROCESS, successNotification)
+
+                                // Add vibration
+                                try {
+                                    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                        val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                                        vibratorManager.defaultVibrator
+                                    } else {
+                                        @Suppress("DEPRECATION")
+                                        getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                                    }
+
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                        vibrator.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
+                                    } else {
+                                        @Suppress("DEPRECATION")
+                                        vibrator.vibrate(500)
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Error during vibration", e)
                                 }
-                                
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    vibrator.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
-                                } else {
-                                    @Suppress("DEPRECATION")
-                                    vibrator.vibrate(500)
-                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error showing success notification", e)
                             }
                         } else {
+                            // Error case in response
                             val errorMessage = jsonResponse.optString("error", "Unknown error occurred")
                             Log.e(TAG, "AI processing API returned error: $errorMessage")
-                            withContext(Dispatchers.Main) {
-                                updateNotificationForAIProcessingFailure("Error: $errorMessage")
-                            }
+                            showProcessingFailureNotification("Error: $errorMessage")
                         }
                     } else {
+                        // HTTP error cases
                         when (response.code) {
                             500 -> {
                                 Log.e(TAG, "AI processing server encountered an internal error (500)")
-                                Log.e(TAG, "Server response: ${responseBody ?: "No response body"}")
-                                var errorDetails = "The AI processing server encountered an internal error."
-                                try {
-                                    if (responseBody != null) {
-                                        val jsonError = JSONObject(responseBody)
-                                        if (jsonError.has("error")) {
-                                            errorDetails += "\n\nError details: ${jsonError.getString("error")}"
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Could not parse error response", e)
-                                }
-                                withContext(Dispatchers.Main) {
-                                    updateNotificationForAIProcessingFailure("Server Error: $errorDetails")
-                                }
+                                showProcessingFailureNotification("Server Error")
                             }
                             else -> {
                                 Log.e(TAG, "AI processing request failed with code: ${response.code}")
-                                withContext(Dispatchers.Main) {
-                                    updateNotificationForAIProcessingFailure("Server error (${response.code})")
-                                }
+                                showProcessingFailureNotification("Server error (${response.code})")
                             }
                         }
                     }
                     response.close()
                 } catch (e: Exception) {
                     Log.e(TAG, "Error during AI processing", e)
-                    withContext(Dispatchers.Main) {
-                        updateNotificationForAIProcessingFailure("Error: ${e.message}")
-                    }
+                    showProcessingFailureNotification("Error: ${e.message}")
+                } finally {
+                    isProcessingActive.set(false)
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error sending file for AI processing", e)
-            updateNotificationForAIProcessingFailure("Error: ${e.message}")
+            showProcessingFailureNotification("Error: ${e.message}")  // Fixed: replaced updateNotificationForAIProcessingFailure with showProcessingFailureNotification
         }
     }
 
-    private fun updateNotificationForAIProcessingSuccess(title: String, summary: String, notionUrl: String) {
-        val notionIntent = Intent(Intent.ACTION_VIEW, Uri.parse(notionUrl))
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            notionIntent,
-            PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_mic) // Changed from ic_notification to ic_mic
-            .setContentTitle("Meeting Notes: $title")
-            .setContentText("Tap to view your notes in Notion")
-            .setStyle(
-                NotificationCompat.BigTextStyle()
-                    .bigText("Summary: ${summary.take(200)}${if (summary.length > 200) "..." else ""}\n\nTap to open in Notion.")
-            )
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-
-        val notificationManager = NotificationManagerCompat.from(this)
-        notificationManager.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
+    private fun createProcessingNotification(): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("WearNote AI Processing")
+            .setContentText("Processing audio in background...")
+            .setSmallIcon(R.drawable.ic_mic)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .build()
     }
 
-    private fun updateNotificationForAIProcessingFailure(errorMessage: String) {
-        val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_mic) // Changed from ic_notification to ic_mic
-            .setContentTitle("AI Analysis Failed")
-            .setContentText(errorMessage)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(errorMessage))
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+    private fun showProcessingFailureNotification(errorMessage: String) {
+        try {
+            val notificationBuilder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_mic)
+                .setContentTitle("AI Analysis Failed")
+                .setContentText(errorMessage)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(errorMessage))
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
 
-        val notificationManager = NotificationManagerCompat.from(this)
-        notificationManager.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
+            val notificationManager = ContextCompat.getSystemService(
+                applicationContext,
+                NotificationManager::class.java
+            )
+            notificationManager?.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error showing failure notification", e)
+        }
     }
 
     private fun notifyUploadComplete(fileId: String?) {

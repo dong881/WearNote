@@ -6,15 +6,16 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import com.example.wearnote.auth.AuthManager
+import com.example.wearnote.viewmodel.DriveViewModel
 import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
-
+class MainActivity : ComponentActivity {
     private lateinit var driveViewModel: DriveViewModel
     private lateinit var authManager: AuthManager
+    private val TAG = "MainActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -22,16 +23,7 @@ class MainActivity : ComponentActivity() {
         driveViewModel = ViewModelProvider(this)[DriveViewModel::class.java]
         authManager = AuthManager(this)
         
-        // Configure sign-in to request the user's ID, email address, and basic profile
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(getString(R.string.android_client_id))
-            .requestServerAuthCode(getString(R.string.android_client_id))
-            .requestEmail()
-            .build()
-            
-        // Build a GoogleSignInClient with the options specified by gso
-        authManager.configureGoogleSignIn(gso)
-
+        // Set up observers
         driveViewModel.isAuthorized.observe(this) { isAuthorized ->
             if (isAuthorized) {
                 driveViewModel.refreshNotesList()
@@ -40,6 +32,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Handle auth redirect if coming from browser
         if (intent.hasExtra("auth_success")) {
             val success = intent.getBooleanExtra("auth_success", false)
             if (success) {
@@ -52,11 +45,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showLoginPrompt() {
-        // Implement a login UI suitable for Wear OS
+        // Implement login UI for Wear OS
+        // This could be a simple button or dialog
+        startAuth()
     }
 
     private fun startAuth() {
-        authManager.startAuthorizationFlow(this)
+        // Get the sign-in client and start the sign-in flow
+        val googleSignInClient = authManager.getGoogleSignInClient()
+        startActivityForResult(googleSignInClient.signInIntent, AuthManager.RC_SIGN_IN)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -66,7 +63,8 @@ class MainActivity : ComponentActivity() {
             try {
                 val task = GoogleSignIn.getSignedInAccountFromIntent(data)
                 val account = task.getResult(ApiException::class.java)
-
+                
+                // Handle successful sign-in
                 val authCode = account?.serverAuthCode
                 if (authCode != null) {
                     lifecycleScope.launch {
@@ -80,14 +78,15 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             } catch (e: ApiException) {
-                Log.e("MainActivity", "Google Sign-In Failed: ${e.statusCode} - ${e.message}")
-                Log.e("MainActivity", "開發者錯誤 (${e.statusCode}) - 表示 CLIENT_ID 或 SHA-1 指紋配置錯誤")
+                Log.e(TAG, "Google Sign-In Failed: ${e.statusCode} - ${e.message}")
+                Log.e(TAG, "Developer error (${e.statusCode}) - Check CLIENT_ID or SHA-1 fingerprint configuration")
                 showToast("Login failed: ${e.statusCode}")
             }
         }
     }
 
     private fun showToast(message: String) {
-        // Implement a method to show toast messages
+        // Implement a method to show toast messages on Wear OS
+        // For example, using a custom toast or a small overlay text
     }
 }

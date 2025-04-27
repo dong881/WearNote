@@ -47,10 +47,11 @@ object ConfigHelper {
             for (signature in info.signatures) {
                 val md = MessageDigest.getInstance("SHA-1")
                 md.update(signature.toByteArray())
-                val sha1 = Base64.encodeToString(md.digest(), Base64.DEFAULT)
+                val digestBytes = md.digest()
+                val sha1 = Base64.encodeToString(digestBytes, Base64.DEFAULT)
                 Log.d(TAG, "應用 SHA-1 證書指紋: $sha1")
                 
-                val hexString = bytesToHexString(md.digest())
+                val hexString = bytesToHexString(digestBytes)
                 Log.d(TAG, "應用 SHA-1 證書指紋 (Hex): $hexString")
             }
         } catch (e: Exception) {

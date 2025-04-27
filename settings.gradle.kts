@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "WearNote"
-include(":mobile", ":wear")
+include(":mobile", ":wear", ":common")

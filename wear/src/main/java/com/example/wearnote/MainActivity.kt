@@ -28,7 +28,7 @@ import androidx.core.content.ContextCompat
 import androidx.wear.compose.material.*
 import com.example.wearnote.service.RecorderService
 import com.example.wearnote.auth.ConfigHelper
-import com.example.wearnote.util.KeystoreHelper
+import com.example.wearnote.auth.KeystoreHelper
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions

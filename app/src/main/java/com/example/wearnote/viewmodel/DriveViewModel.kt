@@ -14,7 +14,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private val authManager = AuthManager(application.applicationContext)
     private val driveService = DriveService(application.applicationContext)
     
-    // LiveData 屬性
+    // LiveData properties
     private val _isAuthorized = MutableLiveData<Boolean>()
     val isAuthorized: LiveData<Boolean> = _isAuthorized
     
@@ -31,14 +31,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         checkAuthStatus()
     }
     
-    // 檢查授權狀態
+    // Check authorization status
     fun checkAuthStatus() {
         viewModelScope.launch {
             _isAuthorized.value = authManager.isAuthorized()
         }
     }
     
-    // 更新筆記列表
+    // Refresh notes list
     fun refreshNotesList() {
         viewModelScope.launch {
             val notesList = driveService.listAllNotes()
@@ -46,7 +46,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
-    // 加載特定筆記內容
+    // Load specific note content
     fun loadNote(fileId: String) {
         viewModelScope.launch {
             val content = driveService.readNote(fileId)
@@ -59,42 +59,42 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
-    // 保存筆記
+    // Save note
     fun saveNote(title: String, content: String) {
         viewModelScope.launch {
             val success = driveService.saveNote(title, content)
             if (success) {
-                _operationStatus.value = OperationStatus.Success("Note saved successfully")
                 refreshNotesList()
+                _operationStatus.value = OperationStatus.Success("Note saved successfully")
             } else {
                 _operationStatus.value = OperationStatus.Error("Failed to save note")
             }
         }
     }
     
-    // 刪除筆記
+    // Delete note
     fun deleteNote(fileId: String) {
         viewModelScope.launch {
             val success = driveService.deleteNote(fileId)
             if (success) {
-                _operationStatus.value = OperationStatus.Success("Note deleted successfully")
                 refreshNotesList()
+                _operationStatus.value = OperationStatus.Success("Note deleted successfully")
             } else {
                 _operationStatus.value = OperationStatus.Error("Failed to delete note")
             }
         }
     }
     
-    // 登出
-    fun logout() {
-        authManager.clearAuthData()
+    // Sign out
+    fun signOut() {
+        authManager.signOut()
         _isAuthorized.value = false
-        _notes.value = emptyList()
     }
 }
 
-// 操作狀態密封類
+// Operation status sealed class
 sealed class OperationStatus {
     data class Success(val message: String) : OperationStatus()
     data class Error(val message: String) : OperationStatus()
+    object Loading : OperationStatus()
 }

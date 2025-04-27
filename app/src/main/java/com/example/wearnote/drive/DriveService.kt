@@ -19,9 +19,10 @@ class DriveService(private val context: Context) {
     private val authManager = AuthManager(context)
     private val transport = NetHttpTransport()
     private val jsonFactory = GsonFactory.getDefaultInstance()
+    private val TAG = "DriveService"
     
-    // 創建並配置 Drive 服務
-    private fun getDriveService(): Drive? {
+    // Get configured Drive service instance
+    private suspend fun getDriveService(): Drive? {
         val accessToken = authManager.getAccessToken() ?: return null
         
         val credential = GoogleAccountCredential.usingOAuth2(
@@ -35,23 +36,23 @@ class DriveService(private val context: Context) {
             .build()
     }
     
-    // 獲取應用文件夾 ID
+    // Get or create app folder
     suspend fun getOrCreateAppFolder(): String? {
         return withContext(Dispatchers.IO) {
             try {
                 val drive = getDriveService() ?: return@withContext null
                 
-                // 查詢應用文件夾
+                // Query for app folder
                 val folderListResult = drive.files().list()
                     .setQ("name='${DriveConstants.NOTES_DIRECTORY}' and mimeType='application/vnd.google-apps.folder' and trashed=false")
                     .setSpaces("drive")
                     .execute()
                     
-                // 返回現有文件夾或創建新文件夾
+                // Return existing folder or create new one
                 if (folderListResult.files.isNotEmpty()) {
                     folderListResult.files[0].id
                 } else {
-                    // 創建新文件夾
+                    // Create new folder
                     val folderMetadata = com.google.api.services.drive.model.File().apply {
                         name = DriveConstants.NOTES_DIRECTORY
                         mimeType = "application/vnd.google-apps.folder"
@@ -64,23 +65,23 @@ class DriveService(private val context: Context) {
                     folder.id
                 }
             } catch (e: Exception) {
-                Log.e("DriveService", "Error accessing app folder", e)
+                Log.e(TAG, "Error accessing app folder", e)
                 null
             }
         }
     }
     
-    // 保存筆記到 Drive
+    // Save note to Drive
     suspend fun saveNote(title: String, content: String): Boolean {
         return withContext(Dispatchers.IO) {
             try {
                 val drive = getDriveService() ?: return@withContext false
                 val folderId = getOrCreateAppFolder() ?: return@withContext false
                 
-                // 查找是否已有同名文件
+                // Check for existing file with same name
                 val existingFileId = findNoteByTitle(title)
                 
-                // 準備文件元數據
+                // Prepare file metadata
                 val fileMetadata = com.google.api.services.drive.model.File().apply {
                     name = "$title.txt"
                     if (folderId.isNotEmpty()) {
@@ -88,14 +89,14 @@ class DriveService(private val context: Context) {
                     }
                 }
                 
-                // 準備文件內容
+                // Prepare file content
                 val contentStream = ByteArrayContent.fromString("text/plain", content)
                 
                 if (existingFileId != null) {
-                    // 更新現有文件
+                    // Update existing file
                     drive.files().update(existingFileId, fileMetadata, contentStream).execute()
                 } else {
-                    // 創建新文件
+                    // Create new file
                     drive.files().create(fileMetadata, contentStream)
                         .setFields("id, name")
                         .execute()
@@ -103,13 +104,13 @@ class DriveService(private val context: Context) {
                 
                 true
             } catch (e: Exception) {
-                Log.e("DriveService", "Error saving note", e)
+                Log.e(TAG, "Error saving note", e)
                 false
             }
         }
     }
     
-    // 根據標題查找筆記
+    // Find note by title
     suspend fun findNoteByTitle(title: String): String? {
         return withContext(Dispatchers.IO) {
             try {
@@ -129,13 +130,13 @@ class DriveService(private val context: Context) {
                     null
                 }
             } catch (e: Exception) {
-                Log.e("DriveService", "Error finding note", e)
+                Log.e(TAG, "Error finding note", e)
                 null
             }
         }
     }
     
-    // 讀取筆記內容
+    // Read note content
     suspend fun readNote(fileId: String): String? {
         return withContext(Dispatchers.IO) {
             try {
@@ -147,13 +148,13 @@ class DriveService(private val context: Context) {
                 
                 outputStream.toString("UTF-8")
             } catch (e: Exception) {
-                Log.e("DriveService", "Error reading note", e)
+                Log.e(TAG, "Error reading note", e)
                 null
             }
         }
     }
     
-    // 獲取所有筆記列表
+    // List all notes
     suspend fun listAllNotes(): List<NoteMetadata>? {
         return withContext(Dispatchers.IO) {
             try {
@@ -161,14 +162,13 @@ class DriveService(private val context: Context) {
                 val folderId = getOrCreateAppFolder() ?: return@withContext null
                 
                 val query = "'$folderId' in parents and mimeType='text/plain' and trashed=false"
-                val fileList = drive.files().list()
+                val result = drive.files().list()
                     .setQ(query)
                     .setSpaces("drive")
                     .setFields("files(id, name, createdTime, modifiedTime)")
                     .execute()
-                
-                fileList.files.map { file ->
-                    // 移除 .txt 後綴以獲取真實標題
+                    
+                result.files.map { file ->
                     val title = file.name.removeSuffix(".txt")
                     NoteMetadata(
                         id = file.id,
@@ -178,13 +178,13 @@ class DriveService(private val context: Context) {
                     )
                 }
             } catch (e: Exception) {
-                Log.e("DriveService", "Error listing notes", e)
+                Log.e(TAG, "Error listing notes", e)
                 null
             }
         }
     }
     
-    // 刪除筆記
+    // Delete note
     suspend fun deleteNote(fileId: String): Boolean {
         return withContext(Dispatchers.IO) {
             try {
@@ -192,15 +192,15 @@ class DriveService(private val context: Context) {
                 drive.files().delete(fileId).execute()
                 true
             } catch (e: Exception) {
-                Log.e("DriveService", "Error deleting note", e)
+                Log.e(TAG, "Error deleting note", e)
                 false
             }
         }
     }
     
-    // 用於受保護 API 的請求處理器
+    // For protected API request handling
     private inner class HttpExecutorWithToken(private val accessToken: String) : 
-            com.google.api.client.http.HttpRequestInitializer {
+        com.google.api.client.http.HttpRequestInitializer {
         
         @Throws(IOException::class)
         override fun initialize(request: com.google.api.client.http.HttpRequest) {
@@ -209,7 +209,7 @@ class DriveService(private val context: Context) {
     }
 }
 
-// 筆記元數據數據類
+// Note metadata data class
 data class NoteMetadata(
     val id: String,
     val title: String,

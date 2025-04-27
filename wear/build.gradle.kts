@@ -57,6 +57,9 @@ android {
 }
 
 dependencies {
+    // Common module dependency
+    implementation(project(":common"))
+    
     // Core dependencies
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")

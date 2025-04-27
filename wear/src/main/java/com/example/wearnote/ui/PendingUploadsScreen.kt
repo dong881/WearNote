@@ -40,6 +40,11 @@ fun PendingUploadsScreen(onBackClick: () -> Unit) {
     val surfaceColor = Color(0xFF303030) // Dark surface
     val backgroundColor = Color(0xFF121212) // Dark background
 
+    // Force a refresh of the pending uploads list when this screen is displayed
+    LaunchedEffect(Unit) {
+        PendingUploadsManager.initialize(context)
+    }
+
     // Screen content
     Box(
         modifier = Modifier
@@ -64,7 +69,7 @@ fun PendingUploadsScreen(onBackClick: () -> Unit) {
                         painter = painterResource(id = R.drawable.ic_check),
                         contentDescription = "No pending uploads",
                         tint = secondaryColor,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(36.dp) // Increased icon size
                     )
                     
                     Spacer(modifier = Modifier.height(4.dp))
@@ -72,7 +77,7 @@ fun PendingUploadsScreen(onBackClick: () -> Unit) {
                     Text(
                         text = "全部同步完成",
                         color = Color.White,
-                        fontSize = 14.sp,
+                        fontSize = 18.sp, // Increased font size
                         textAlign = TextAlign.Center
                     )
                     
@@ -83,13 +88,26 @@ fun PendingUploadsScreen(onBackClick: () -> Unit) {
                         colors = ButtonDefaults.buttonColors(backgroundColor = primaryColor),
                         modifier = Modifier
                             .fillMaxWidth(0.8f)
-                            .height(36.dp)
+                            .height(40.dp) // Larger button
                     ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_arrow_back),
-                            contentDescription = "Back",
-                            tint = Color.White
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_arrow_back),
+                                contentDescription = "Back",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp) // Larger icon
+                            )
+                            
+                            Spacer(modifier = Modifier.width(4.dp))
+                            
+                            Text(
+                                text = "返回",
+                                fontSize = 16.sp // Larger text
+                            )
+                        }
                     }
                 }
             } else {
@@ -102,7 +120,7 @@ fun PendingUploadsScreen(onBackClick: () -> Unit) {
                         Text(
                             text = "等待同步的檔案",
                             color = Color.White,
-                            fontSize = 14.sp,
+                            fontSize = 18.sp, // Increased size
                             modifier = Modifier.fillMaxWidth(),
                             textAlign = TextAlign.Center,
                             fontWeight = FontWeight.Bold
@@ -137,11 +155,26 @@ fun PendingUploadsScreen(onBackClick: () -> Unit) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp)
+                                .height(40.dp) // Larger button
                         ) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_arrow_back),
-                                contentDescription = "Back"
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_arrow_back),
+                                    contentDescription = "Back",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp) // Larger icon
+                                )
+                                
+                                Spacer(modifier = Modifier.width(4.dp))
+                                
+                                Text(
+                                    text = "返回",
+                                    fontSize = 16.sp // Larger text
+                                )
+                            }
                         }
                     }
                 }
@@ -151,7 +184,7 @@ fun PendingUploadsScreen(onBackClick: () -> Unit) {
 }
 
 @Composable
-fun PendingUploadItem(
+private fun PendingUploadItem(
     pendingUpload: PendingUpload,
     primaryColor: Color,
     errorColor: Color,
@@ -169,7 +202,7 @@ fun PendingUploadItem(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(6.dp) // Reduced padding
+                .padding(8.dp) // Slightly increased padding
         ) {
             // File name and type
             Row(
@@ -185,10 +218,10 @@ fun PendingUploadItem(
                     },
                     contentDescription = "Upload type",
                     tint = primaryColor,
-                    modifier = Modifier.size(14.dp) // Smaller icon
+                    modifier = Modifier.size(22.dp) // Increased from 18dp
                 )
                 
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(4.dp)) // Slightly increased
                 
                 // Modified text display to show beginning and end with ellipsis in middle
                 val filename = pendingUpload.displayName
@@ -201,7 +234,7 @@ fun PendingUploadItem(
                 Text(
                     text = displayText,
                     color = Color.White,
-                    fontSize = 10.sp, // Smaller text
+                    fontSize = 14.sp, // Increased from 12sp
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
@@ -212,32 +245,32 @@ fun PendingUploadItem(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 2.dp), // Reduced spacing
+                    .padding(top = 4.dp), // Increased from 1dp
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 // Retry button
                 SmallButton(
                     onClick = onRetry,
-                    modifier = Modifier.size(22.dp) // Smaller buttons
+                    modifier = Modifier.size(30.dp) // Increased from 26dp
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.ic_refresh),
                         contentDescription = "Retry upload",
                         tint = primaryColor,
-                        modifier = Modifier.size(16.dp) // Smaller icon
+                        modifier = Modifier.size(24.dp) // Increased from 20dp
                     )
                 }
                 
                 // Delete button
                 SmallButton(
                     onClick = onDelete,
-                    modifier = Modifier.size(22.dp) // Smaller buttons
+                    modifier = Modifier.size(30.dp) // Increased from 26dp
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.ic_delete),
                         contentDescription = "Delete upload",
                         tint = errorColor,
-                        modifier = Modifier.size(16.dp) // Smaller icon
+                        modifier = Modifier.size(24.dp) // Increased from 20dp
                     )
                 }
             }
@@ -254,8 +287,15 @@ fun SmallButton(
     Button(
         onClick = onClick,
         modifier = modifier,
-        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF424242))
+        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF525252)) // Slightly lighter for better visibility
     ) {
-        content()
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(4.dp), // Apply padding to the Box instead of using contentPadding
+            contentAlignment = Alignment.Center
+        ) {
+            content()
+        }
     }
 }

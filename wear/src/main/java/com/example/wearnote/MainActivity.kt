@@ -439,12 +439,17 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    private fun showInitialUI(autoStartRecording: Boolean = false) {
+    private fun showInitialUI(autoStartRecording: Boolean = false, forceRefresh: Boolean = false) {
         // Reset recording state
         isRecording.value = false
         isPaused.value = false
         elapsedTime.value = 0
         currentRecordingState = RecordingState.IDLE
+        
+        // Add this to ensure PendingUploadsManager is properly initialized
+        if (forceRefresh) {
+            PendingUploadsManager.initialize(this)
+        }
         
         if (autoStartRecording) {
             // Start recording automatically and return to home
@@ -460,7 +465,90 @@ class MainActivity : ComponentActivity() {
         
         // Show initial UI
         setContent { 
-            InitialUI()
+            WearNoteTheme {
+                ScalingLazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    item {
+                        Text(
+                            text = getString(R.string.app_name),
+                            style = MaterialTheme.typography.title1,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    
+                    item {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = { startRecording() },
+                            modifier = Modifier
+                                .fillMaxWidth(0.7f)
+                                .padding(vertical = 4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                backgroundColor = MaterialTheme.colors.primary
+                            )
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_mic),
+                                contentDescription = "Start Recording",
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                    }
+                    
+                    // Add Pending Uploads button 
+                    item {
+                        val pendingUploadsCount = remember {
+                            mutableStateOf(0)
+                        }
+                        
+                        // Force an immediate update on composition
+                        LaunchedEffect(forceRefresh) {
+                            pendingUploadsCount.value = PendingUploadsManager.getPendingUploadCount()
+                        }
+                        
+                        // Observe changes in pending uploads
+                        LaunchedEffect(Unit) {
+                            PendingUploadsManager.pendingUploadsFlow.collect {
+                                pendingUploadsCount.value = it.size
+                            }
+                        }
+                        
+                        if (pendingUploadsCount.value > 0) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { showPendingUploadsScreen() },
+                                modifier = Modifier
+                                    .fillMaxWidth(0.7f)
+                                    .padding(vertical = 4.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    backgroundColor = Color.DarkGray
+                                )
+                            ) {
+                                Text("Pending (${pendingUploadsCount.value})")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fix the function that shows the pending uploads screen
+    private fun showPendingUploadsScreen() {
+        setContent {
+            WearNoteTheme {
+                PendingUploadsScreen(
+                    onBackClick = { 
+                        // Update to pass the correct parameter
+                        showInitialUI(autoStartRecording = false)
+                    }
+                )
+            }
         }
     }
 
@@ -507,97 +595,6 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun WearNoteTheme(content: @Composable () -> Unit) {
         MaterialTheme(content = content)
-    }
-
-    @Composable
-    private fun InitialUI() {
-        WearNoteTheme {
-            ScalingLazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                item {
-                    Text(
-                        text = getString(R.string.app_name),
-                        style = MaterialTheme.typography.title1,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                
-                item {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(
-                        onClick = { startRecording() },
-                        modifier = Modifier
-                            .fillMaxWidth(0.7f)
-                            .padding(vertical = 4.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            backgroundColor = MaterialTheme.colors.primary
-                        )
-                    ) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_mic),
-                            contentDescription = "Start Recording",
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-//                        Text("Record")
-                    }
-                }
-                
-                // Add Pending Uploads button 
-                item {
-                    val pendingUploadsCount = remember {
-                        mutableStateOf(0)
-                    }
-                    
-                    // Update count when screen is shown
-                    LaunchedEffect(Unit) {
-                        PendingUploadsManager.initialize(this@MainActivity)
-                        pendingUploadsCount.value = PendingUploadsManager.getPendingUploadCount()
-                    }
-                    
-                    // Observe changes in pending uploads
-                    LaunchedEffect(Unit) {
-                        PendingUploadsManager.pendingUploadsFlow.collect {
-                            pendingUploadsCount.value = it.size
-                        }
-                    }
-                    
-                    if (pendingUploadsCount.value > 0) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = { showPendingUploadsScreen() },
-                            modifier = Modifier
-                                .fillMaxWidth(0.7f)
-                                .padding(vertical = 4.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                backgroundColor = Color.DarkGray
-                            )
-                        ) {
-                            Text("Pending (${pendingUploadsCount.value})")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Add the function to show the pending uploads screen
-    private fun showPendingUploadsScreen() {
-        setContent {
-            WearNoteTheme {
-                PendingUploadsScreen(
-                    onBackClick = { 
-                        showInitialUI(false)
-                        // Ensure we check pending uploads when returning to the main screen
-                        checkPendingUploads()
-                    }
-                )
-            }
-        }
     }
 
     @Composable

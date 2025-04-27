@@ -1,6 +1,8 @@
 package com.example.wearnote.service
 
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.util.Log
 import com.example.wearnote.model.PendingUpload
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
@@ -58,24 +60,26 @@ object PendingUploadsManager {
      */
     fun addPendingUpload(
         context: Context, 
-        file: File, 
+        file: File?, 
         uploadType: PendingUpload.UploadType = PendingUpload.UploadType.DRIVE,
         fileId: String? = null,
         failureReason: String? = null
     ) {
+        if (file == null) {
+            Log.w(TAG, "Attempted to add pending upload with null file, ignoring")
+            return
+        }
+        
         // Only add to pending uploads if there's no internet or we've already tried once
         if (!GoogleDriveUploader.isNetworkAvailable(context) || failureReason != null) {
-            val pendingUpload = PendingUpload(
-                fileName = file.name,
-                filePath = file.absolutePath,
-                uploadType = uploadType,
-                fileId = fileId,
-                failureReason = failureReason
+            addPendingUploadByPath(
+                context,
+                file.name,
+                file.absolutePath,
+                uploadType,
+                fileId,
+                failureReason
             )
-            pendingUploads[file.absolutePath] = pendingUpload
-            saveToPrefs(context)
-            updateFlow()
-            Log.d(TAG, "Added pending upload: ${file.name}, type: $uploadType")
         } else {
             Log.d(TAG, "Network available, not adding to pending list: ${file.name}")
             // Attempt immediate upload if we have internet
@@ -85,6 +89,48 @@ object PendingUploadsManager {
                     retryDriveUpload(context, file)
                 }
             }
+        }
+    }
+    
+    /**
+     * Add a pending upload by path without requiring a File object
+     */
+    fun addPendingUploadByPath(
+        context: Context,
+        fileName: String,
+        filePath: String,
+        uploadType: PendingUpload.UploadType = PendingUpload.UploadType.DRIVE,
+        fileId: String? = null,
+        failureReason: String? = null
+    ) {
+        // Create and store the pending upload
+        val pendingUpload = PendingUpload(
+            fileName = fileName,
+            filePath = filePath,
+            uploadType = uploadType,
+            fileId = fileId,
+            failureReason = failureReason
+        )
+        
+        pendingUploads[filePath] = pendingUpload
+        saveToPrefs(context)
+        updateFlow()
+        Log.d(TAG, "Added pending upload by path: $fileName, type: $uploadType")
+    }
+    
+    /**
+     * Remove pending uploads by fileId
+     */
+    fun removeByFileId(context: Context, fileId: String) {
+        val toRemove = pendingUploads.values.filter { it.fileId == fileId }
+        toRemove.forEach { upload ->
+            pendingUploads.remove(upload.filePath)
+            Log.d(TAG, "Removed pending upload with fileId: $fileId, path: ${upload.filePath}")
+        }
+        
+        if (toRemove.isNotEmpty()) {
+            saveToPrefs(context)
+            updateFlow()
         }
     }
     
@@ -138,9 +184,40 @@ object PendingUploadsManager {
         
         val file = File(pendingUpload.filePath)
         if (!file.exists()) {
-            Log.e(TAG, "File no longer exists: ${pendingUpload.filePath}")
-            removePendingUpload(context, pendingUpload.filePath)
-            return@withContext false
+            // Only remove if no fileId is available
+            if (pendingUpload.fileId == null) {
+                Log.e(TAG, "File no longer exists and no fileId available: ${pendingUpload.filePath}")
+                removePendingUpload(context, pendingUpload.filePath)
+                return@withContext false
+            } else {
+                // File doesn't exist but we have a fileId
+                Log.d(TAG, "File no longer exists but fileId is available: ${pendingUpload.filePath}")
+                
+                // For AI_PROCESSING we can continue without the local file
+                if (pendingUpload.uploadType == PendingUpload.UploadType.AI_PROCESSING) {
+                    // Launch AI processing retry without requiring local file
+                    val intent = Intent(context, RecorderService::class.java).apply {
+                        action = RecorderService.ACTION_START_AI_PROCESSING
+                        putExtra("file_id", pendingUpload.fileId)
+                        putExtra("file_path", pendingUpload.filePath)
+                        putExtra("is_retry", true)
+                    }
+                    
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                    
+                    Log.d(TAG, "Started AI processing retry without local file for ${pendingUpload.fileName}")
+                    return@withContext true
+                } else {
+                    // For DRIVE or BOTH types, we need the local file
+                    Log.e(TAG, "Local file needed for ${pendingUpload.uploadType} but not found: ${pendingUpload.filePath}")
+                    // Don't remove it - let the user decide to delete it manually
+                    return@withContext false
+                }
+            }
         }
         
         when (pendingUpload.uploadType) {
@@ -152,14 +229,56 @@ object PendingUploadsManager {
                 return@withContext success
             }
             PendingUpload.UploadType.AI_PROCESSING -> {
-                // For now, just remove it as the AI processing retry is more complex
-                removePendingUpload(context, pendingUpload.filePath)
-                return@withContext true
+                // Don't remove it automatically - actually retry the AI processing
+                if (pendingUpload.fileId != null) {
+                    // Launch a service to retry AI processing
+                    val intent = Intent(context, RecorderService::class.java).apply {
+                        action = RecorderService.ACTION_START_AI_PROCESSING
+                        putExtra("file_id", pendingUpload.fileId)
+                        putExtra("file_path", pendingUpload.filePath)
+                        // Add a flag to indicate this is a retry
+                        putExtra("is_retry", true)
+                    }
+                    
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                    
+                    Log.d(TAG, "Started AI processing retry for ${pendingUpload.fileName}")
+                    return@withContext true // Just indicate we started the retry, not that it succeeded
+                } else {
+                    Log.e(TAG, "Cannot retry AI processing without a fileId")
+                    return@withContext false
+                }
             }
             PendingUpload.UploadType.BOTH -> {
-                // For now, just remove it as the combined retry is more complex
-                removePendingUpload(context, pendingUpload.filePath)
-                return@withContext true
+                // First retry upload to Drive, then AI processing if successful
+                val driveSuccess = retryDriveUpload(context, file)
+                if (driveSuccess && pendingUpload.fileId != null) {
+                    // Now attempt AI processing
+                    val intent = Intent(context, RecorderService::class.java).apply {
+                        action = RecorderService.ACTION_START_AI_PROCESSING
+                        putExtra("file_id", pendingUpload.fileId)
+                        putExtra("file_path", pendingUpload.filePath)
+                        putExtra("is_retry", true)
+                    }
+                    
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                    
+                    // Remove from BOTH type but may be added again as AI_PROCESSING if that part fails
+                    removePendingUpload(context, pendingUpload.filePath)
+                    Log.d(TAG, "Drive upload succeeded, started AI processing for ${pendingUpload.fileName}")
+                    return@withContext true
+                } else {
+                    Log.e(TAG, "Drive upload failed or no fileId for ${pendingUpload.fileName}")
+                    return@withContext false
+                }
             }
         }
     }
@@ -228,18 +347,51 @@ object PendingUploadsManager {
             val loadedUploads: List<PendingUpload> = gson.fromJson(json, type)
             
             pendingUploads.clear()
+            
+            // Map to track uploads by fileId to detect duplicates
+            val fileIdMap = mutableMapOf<String, PendingUpload>()
+            
+            // First add all uploads and track by fileId if available
             loadedUploads.forEach { upload ->
                 pendingUploads[upload.filePath] = upload
+                
+                // Track uploads by fileId to detect duplicates
+                if (upload.fileId != null && upload.fileId.isNotEmpty()) {
+                    val existing = fileIdMap[upload.fileId]
+                    if (existing == null || existing.timestamp < upload.timestamp) {
+                        // Keep the newer one if duplicate
+                        fileIdMap[upload.fileId] = upload
+                    }
+                }
             }
             
-            // Clean up uploads for files that no longer exist
+            // Remove duplicates keeping only the newest one for each fileId
+            if (fileIdMap.isNotEmpty()) {
+                // Identify and remove duplicates (older entries with same fileId)
+                pendingUploads.entries.removeIf { entry ->
+                    val upload = entry.value
+                    upload.fileId != null && 
+                    fileIdMap[upload.fileId] != null && 
+                    fileIdMap[upload.fileId] !== upload // Not the same instance
+                }
+                
+                Log.d(TAG, "Removed ${loadedUploads.size - pendingUploads.size} duplicate fileId entries")
+            }
+            
+            // Only clean up uploads that have no fileId AND the local file doesn't exist
             val iterator = pendingUploads.entries.iterator()
             while (iterator.hasNext()) {
                 val entry = iterator.next()
                 val file = File(entry.key)
-                if (!file.exists()) {
-                    Log.d(TAG, "Removing non-existent file from pending uploads: ${entry.value.fileName}")
+                val upload = entry.value
+                
+                // Only remove if the file doesn't exist AND we have no fileId to retry with
+                if (!file.exists() && upload.fileId == null) {
+                    Log.d(TAG, "Removing pending upload with no file and no fileId: ${upload.fileName}")
                     iterator.remove()
+                } else if (!file.exists()) {
+                    // File doesn't exist but we have a fileId, so we can still retry AI processing
+                    Log.d(TAG, "Keeping pending upload despite missing file because it has fileId: ${upload.fileName}")
                 }
             }
             

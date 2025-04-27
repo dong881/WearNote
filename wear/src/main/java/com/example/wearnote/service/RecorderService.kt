@@ -136,19 +136,14 @@ class RecorderService : Service() {
             ACTION_CHECK_UPLOAD_STATUS -> checkUploadStatus()
             ACTION_START_AI_PROCESSING -> {
                 val fileId = intent.getStringExtra("file_id")
-                val filePath = intent.getStringExtra("file_path")
+                val isRetry = intent.getBooleanExtra("is_retry", false)
                 
-                if (fileId != null && filePath != null) {
-                    val file = File(filePath)
-                    if (file.exists()) {
-                        processingScope.launch {
-                            sendToAIProcessing(fileId, file)
-                        }
-                    } else {
-                        Log.e(TAG, "File not found for AI processing: $filePath")
+                if (fileId != null) {
+                    processingScope.launch {
+                        sendToAIProcessing(fileId, isRetry)
                     }
                 } else {
-                    Log.e(TAG, "Missing fileId or filePath for AI processing")
+                    Log.e(TAG, "Missing fileId for AI processing")
                 }
             }
             ACTION_UPLOAD_AND_PROCESS -> {
@@ -175,7 +170,11 @@ class RecorderService : Service() {
                                 Log.i(TAG, "Upload successful! Google Drive File ID: $fileId")
                                 
                                 // Send HTTP POST to the AI processing endpoint
-                                sendToAIProcessing(fileId, file)
+                                sendToAIProcessing(fileId, false)
+                                notifyUploadComplete(fileId)
+                            } else {
+                                // Error handling already done in GoogleDriveUploader.upload
+                                notifyUploadComplete(null)
                             }
                         }
                     } else {
@@ -517,7 +516,7 @@ class RecorderService : Service() {
                         Log.i(TAG, "Upload successful! Google Drive File ID: $fileId")
                         
                         // Send HTTP POST to the AI processing endpoint
-                        sendToAIProcessing(fileId, file)
+                        sendToAIProcessing(fileId, false)
                         notifyUploadComplete(fileId)
                     } else {
                         // Error handling already done in GoogleDriveUploader.upload
@@ -537,8 +536,12 @@ class RecorderService : Service() {
         }
     }
 
-    private fun sendToAIProcessing(fileId: String, localFile: File) {
+    private fun sendToAIProcessing(fileId: String, isRetry: Boolean = false) {
         try {
+            if (isRetry) {
+                Log.d(TAG, "Retrying AI processing for fileId: $fileId")
+            }
+            
             // Show notification that AI analysis has begun
             val notificationBuilder = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_mic)
@@ -549,13 +552,16 @@ class RecorderService : Service() {
             val notificationManager = NotificationManagerCompat.from(this)
             notificationManager.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
 
-            // Keep track of the file being processed
-            processingFiles[fileId] = localFile
             isProcessingActive.set(true)
 
             // Create JSON payload
             val jsonObject = JSONObject()
             jsonObject.put("file_id", fileId)
+            // Add retry flag if it's a retry
+            if (isRetry) {
+                jsonObject.put("is_retry", true)
+            }
+            
             val requestBody = jsonObject.toString().toRequestBody("application/json".toMediaType())
 
             // Create and execute request
@@ -570,9 +576,9 @@ class RecorderService : Service() {
                     // Make sure service stays alive during processing
                     startForeground(NOTIFICATION_ID_AI_PROCESS, createProcessingNotification())
 
-                    // Create a new OkHttpClient with even longer timeout
+                    // Create a new OkHttpClient with shorter timeout as requested
                     val processingClient = OkHttpClient.Builder()
-                        .connectTimeout(180, TimeUnit.SECONDS)
+                        .connectTimeout(5000, TimeUnit.MILLISECONDS)  // 5 seconds timeout
                         .readTimeout(600, TimeUnit.SECONDS)  // 10 minutes timeout for processing
                         .writeTimeout(60, TimeUnit.SECONDS)
                         .build()
@@ -605,10 +611,10 @@ class RecorderService : Service() {
                             Log.i(TAG, "Notion URL: $notionPageUrl")
                             Log.i(TAG, "Found ${todos.size} todos")
 
-                            // Delete the local file after successful processing
+                            // Delete the local file after successful processing if we have a reference to it
                             try {
-                                val fileToDelete = processingFiles.remove(fileId) ?: localFile
-                                if (fileToDelete.exists()) {
+                                val fileToDelete = processingFiles.remove(fileId)
+                                if (fileToDelete != null && fileToDelete.exists()) {
                                     if (fileToDelete.delete()) {
                                         Log.i(TAG, "Local recording file deleted successfully: ${fileToDelete.absolutePath}")
                                     } else {
@@ -617,6 +623,14 @@ class RecorderService : Service() {
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error while trying to delete local file", e)
+                            }
+
+                            // Remove from pending uploads by fileId
+                            try {
+                                PendingUploadsManager.removeByFileId(this@RecorderService, fileId)
+                                Log.d(TAG, "Removed successful AI processing from pending uploads by fileId: $fileId")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error removing from pending uploads", e)
                             }
 
                             // Show success notification
@@ -674,13 +688,25 @@ class RecorderService : Service() {
                             // Error case in response
                             val errorMessage = jsonResponse.optString("error", "Unknown error occurred")
                             Log.e(TAG, "AI processing API returned error: $errorMessage")
+                            
+                            // Add to pending uploads when API returns an error using path method
+                            PendingUploadsManager.addPendingUploadByPath(
+                                this@RecorderService,
+                                "Processing_$fileId.m4a",
+                                "$fileId.m4a",
+                                PendingUpload.UploadType.AI_PROCESSING,
+                                fileId,
+                                "API error: $errorMessage"
+                            )
+                            
                             showProcessingFailureNotification("Error: $errorMessage")
                         }
                     } else {
                         // Notify failure and add to pending uploads
-                        PendingUploadsManager.addPendingUpload(
+                        PendingUploadsManager.addPendingUploadByPath(
                             this@RecorderService,
-                            localFile,
+                            "Processing_$fileId.m4a",
+                            "$fileId.m4a",
                             PendingUpload.UploadType.AI_PROCESSING,
                             fileId,
                             "API responded with code ${response.code}"
@@ -690,10 +716,11 @@ class RecorderService : Service() {
                         showProcessingFailureNotification("Server error (${response.code})")
                     }
                 } catch (e: Exception) {
-                    // Add to pending uploads with the new manager
-                    PendingUploadsManager.addPendingUpload(
+                    // Add to pending uploads without requiring a local file
+                    PendingUploadsManager.addPendingUploadByPath(
                         this@RecorderService,
-                        localFile,
+                        "Processing_$fileId.m4a",
+                        "$fileId.m4a",
                         PendingUpload.UploadType.AI_PROCESSING,
                         fileId,
                         e.message ?: "Network error"
@@ -706,10 +733,11 @@ class RecorderService : Service() {
                 }
             }
         } catch (e: Exception) {
-            // Add to pending uploads with the new manager for AI processing
-            PendingUploadsManager.addPendingUpload(
-                this,
-                localFile,
+            // Use a dummy filename based on fileId when no file is available
+            PendingUploadsManager.addPendingUploadByPath(
+                this@RecorderService,
+                "Processing_$fileId.m4a",
+                "$fileId.m4a",
                 PendingUpload.UploadType.AI_PROCESSING,
                 fileId,
                 e.message ?: "Error preparing request"

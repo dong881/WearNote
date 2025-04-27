@@ -132,6 +132,7 @@ class RecorderService : Service() {
             ACTION_STOP_RECORDING -> stopRecordingAndUpload()
             ACTION_PAUSE_RECORDING -> pauseRecording()
             ACTION_RESUME_RECORDING -> resumeRecording()
+            ACTION_DISCARD_RECORDING -> discardRecording()  // Add this handler
             ACTION_CHECK_UPLOAD_STATUS -> checkUploadStatus()
             ACTION_START_AI_PROCESSING -> {
                 val fileId = intent.getStringExtra("file_id")
@@ -187,6 +188,61 @@ class RecorderService : Service() {
             else -> Log.w(TAG, "Unknown action received or null intent")
         }
         return START_STICKY
+    }
+
+    private fun discardRecording() {
+        if (!isRecording && mediaRecorder == null) {
+            Log.w(TAG, "No active recording to discard")
+            notifyRecordingDiscarded()
+            stopSelf()
+            return
+        }
+
+        Log.d(TAG, "Discarding recording...")
+        try {
+            if (mediaRecorder != null) {
+                try {
+                    if (isRecording && !isPaused) {
+                        mediaRecorder?.stop()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping recorder", e)
+                }
+
+                mediaRecorder?.reset()
+                mediaRecorder?.release()
+                mediaRecorder = null
+            }
+
+            isRecording = false
+            isPaused = false
+
+            if (::outputFile.isInitialized && outputFile.exists()) {
+                if (outputFile.delete()) {
+                    Log.d(TAG, "Deleted recording file: ${outputFile.absolutePath}")
+                } else {
+                    Log.e(TAG, "Failed to delete recording file: ${outputFile.absolutePath}")
+                }
+            }
+
+            notifyRecordingDiscarded()
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error discarding recording", e)
+            notifyRecordingDiscarded()
+        } finally {
+            releaseWakeLock()
+            stopSelf()
+        }
+    }
+
+    private fun notifyRecordingDiscarded() {
+        val intent = Intent(MainActivity.ACTION_RECORDING_STATUS).apply {
+            putExtra(MainActivity.EXTRA_STATUS, MainActivity.STATUS_RECORDING_DISCARDED)
+        }
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+        Log.d(TAG, "Sending recording discarded broadcast")
+        sendBroadcast(intent)
     }
 
     private fun checkUploadStatus() {

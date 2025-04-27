@@ -114,23 +114,18 @@ object ConfigHelper {
      */
     private fun checkClientId(context: Context) {
         try {
-            // Check if the client ID is in resources
-            val possibleResNames = listOf(
-                "default_web_client_id", "google_client_id", "client_id", "oauth_client_id"
-            )
-            
-            for (name in possibleResNames) {
-                val resId = context.resources.getIdentifier(name, "string", context.packageName)
-                if (resId != 0) {
-                    val clientId = context.getString(resId)
-                    Log.d(TAG, "找到 CLIENT_ID: ${clientId.take(15)}...${clientId.takeLast(15)}")
-                    return
+            val resId = context.resources.getIdentifier("android_client_id", "string", context.packageName)
+            if (resId != 0) {
+                val clientId = context.getString(resId)
+                Log.d(TAG, "找到 CLIENT_ID: ${clientId.take(15)}...${clientId.takeLast(15)}")
+                if (clientId.endsWith(".apps.googleusercontent.com")) {
+                    Log.d(TAG, "✓ Client ID 格式正確")
+                } else {
+                    Log.e(TAG, "✗ Client ID 格式不正確，應以 .apps.googleusercontent.com 結尾")
                 }
+                return
             }
-            
-            // If we reach here, we didn't find a client ID
-            Log.w(TAG, "在資源中找不到 CLIENT_ID，請確認您已經正確配置 GoogleSignInOptions")
-            
+            Log.e(TAG, "在資源中找不到 android_client_id，請確認 strings.xml 配置")
         } catch (e: Exception) {
             Log.e(TAG, "檢查 CLIENT_ID 時出錯", e)
         }

@@ -22,8 +22,8 @@ class AuthManager(private val context: Context) {
     // Initialize with default configuration if not explicitly configured
     init {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(context.getString(R.string.default_web_client_id))
-            .requestServerAuthCode(context.getString(R.string.default_web_client_id))
+            .requestIdToken(context.getString(R.string.android_client_id))
+            .requestServerAuthCode(context.getString(R.string.android_client_id))
             .requestEmail()
             .build()
         

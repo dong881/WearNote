@@ -4,7 +4,7 @@ import android.content.Context
 
 object DriveConstants {
     // OAuth 相關
-    fun getClientId(context: Context): String = context.getString(com.example.wearnote.R.string.google_client_id)
+    fun getClientId(context: Context): String = context.getString(com.example.wearnote.R.string.android_client_id)
     const val REDIRECT_URI = "com.example.wearnote:/oauth2callback"
     const val AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
     const val TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"

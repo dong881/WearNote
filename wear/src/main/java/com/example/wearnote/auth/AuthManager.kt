@@ -40,8 +40,7 @@ class AuthManager(private val context: Context) {
     
     // 標準 OAuth 授權流程
     private fun startStandardOAuth(activity: ComponentActivity) {
-        // 獲取 CLIENT_ID
-        val clientId = context.getString(R.string.default_web_client_id)
+        val clientId = context.getString(R.string.android_client_id)
         
         // 構建 OAuth 授權 URL
         val authUri = Uri.parse(AUTH_ENDPOINT).buildUpon()
@@ -58,7 +57,7 @@ class AuthManager(private val context: Context) {
     
     // 使用 Google Sign-In API 進行授權
     fun startGoogleSignIn(activity: ComponentActivity) {
-        val clientId = context.getString(R.string.default_web_client_id)
+        val clientId = context.getString(R.string.android_client_id)
         
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()

@@ -24,8 +24,8 @@ class MainActivity : ComponentActivity() {
         
         // Configure sign-in to request the user's ID, email address, and basic profile
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestIdToken(getString(R.string.default_web_client_id))
-            .requestServerAuthCode(getString(R.string.default_web_client_id))
+            .requestIdToken(getString(R.string.android_client_id))
+            .requestServerAuthCode(getString(R.string.android_client_id))
             .requestEmail()
             .build()
             

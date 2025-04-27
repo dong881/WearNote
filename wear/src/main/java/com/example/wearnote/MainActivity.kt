@@ -69,11 +69,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Configure Google Sign-In with client ID
+        // Configure Google Sign-In with Android client ID only
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
-            .requestIdToken(getString(R.string.default_web_client_id))
-            .requestServerAuthCode(getString(R.string.default_web_client_id))
+            .requestIdToken(getString(R.string.android_client_id))
+            .requestServerAuthCode(getString(R.string.android_client_id))
             .build()
         googleSignInClient = GoogleSignIn.getClient(this, gso)
         

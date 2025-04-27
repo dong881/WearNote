@@ -158,16 +158,9 @@ object KeystoreHelper {
      */
     private fun findClientId(context: Context): String? {
         try {
-            // Check in string resources with common names
-            val possibleResNames = listOf(
-                "default_web_client_id", "google_client_id", "client_id", "oauth_client_id"
-            )
-            
-            for (name in possibleResNames) {
-                val resId = context.resources.getIdentifier(name, "string", context.packageName)
-                if (resId != 0) {
-                    return context.getString(resId)
-                }
+            val resId = context.resources.getIdentifier("android_client_id", "string", context.packageName)
+            if (resId != 0) {
+                return context.getString(resId)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error finding client ID in resources", e)

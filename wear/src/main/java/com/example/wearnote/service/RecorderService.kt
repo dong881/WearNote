@@ -45,6 +45,7 @@ class RecorderService : Service() {
         const val ACTION_STOP_RECORDING = "com.example.wearnote.ACTION_STOP_RECORDING"
         const val ACTION_PAUSE_RECORDING = "com.example.wearnote.ACTION_PAUSE_RECORDING" // New action
         const val ACTION_RESUME_RECORDING = "com.example.wearnote.ACTION_RESUME_RECORDING" // New action
+        const val ACTION_DISCARD_RECORDING = "com.example.wearnote.ACTION_DISCARD_RECORDING" // Add new action
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "RecorderServiceChannel"
     }
@@ -65,6 +66,7 @@ class RecorderService : Service() {
             ACTION_STOP_RECORDING -> stopRecordingAndUpload()
             ACTION_PAUSE_RECORDING -> pauseRecording()
             ACTION_RESUME_RECORDING -> resumeRecording()
+            ACTION_DISCARD_RECORDING -> discardRecording() // Add new case
             else -> Log.w(TAG, "Unknown action received or null intent")
         }
         // If the service is killed, restart it with the last intent
@@ -83,7 +85,7 @@ class RecorderService : Service() {
 
         try {
             outputFile = createOutputFile()
-            Log.i(TAG, "Audio file will be saved at: ${outputFile.absolutePath}") // Log file path
+            Log.i(TAG, "Audio file will be saved at: ${outputFile.absolutePath}")
 
             mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(this)
@@ -94,8 +96,13 @@ class RecorderService : Service() {
 
             mediaRecorder?.apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP) // Standard format
-                setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB) // Standard encoder
+                // Change output format to MPEG_4 for .m4a
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                // Change audio encoder to AAC for better quality
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                // Set audio quality and bitrate parameters
+                setAudioEncodingBitRate(128000)  // 128kbps
+                setAudioSamplingRate(44100)      // 44.1kHz
                 setOutputFile(outputFile.absolutePath)
                 prepare()
                 start()
@@ -103,12 +110,8 @@ class RecorderService : Service() {
             isRecording = true
             isPaused = false // Reset pause state
             Log.d(TAG, "Recording started")
-            // TODO: Update UI state via Broadcast or other mechanism if needed
         } catch (e: IOException) {
             Log.e(TAG, "MediaRecorder prepare() failed", e)
-            stopSelf() // Stop service if setup fails
-        } catch (e: IllegalStateException) {
-            Log.e(TAG, "MediaRecorder start() failed", e)
             stopSelf()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start recording", e)
@@ -160,18 +163,14 @@ class RecorderService : Service() {
     private fun stopRecordingAndUpload() {
         if (!isRecording) {
             Log.w(TAG, "Recording not active, cannot stop.")
-            // If the service was started but recording failed, it might still need stopping.
-            if (mediaRecorder == null && !::outputFile.isInitialized) {
-                stopSelf()
-            }
+            stopSelf()
             return
         }
 
         Log.d(TAG, "Stopping recording...")
         try {
-            // If paused, no need to resume before stopping
+            // Ensure MediaRecorder is stopped properly
             mediaRecorder?.stop()
-            mediaRecorder?.reset() // Reset before release
             mediaRecorder?.release()
             mediaRecorder = null
             isRecording = false
@@ -179,20 +178,20 @@ class RecorderService : Service() {
             Log.d(TAG, "Recording stopped.")
 
             // Update notification to show uploading status
-            updateNotification("Saving and uploading recording...")
+            updateNotification("Uploading recording...")
 
             // Check if the file is valid (exists and has size > 0)
-            if (::outputFile.isInitialized && outputFile.exists() && outputFile.length() > 100) { // Check size > 100 bytes
+            if (::outputFile.isInitialized && outputFile.exists() && outputFile.length() > 100) {
                 Log.d(TAG, "Recording saved: ${outputFile.absolutePath}, size: ${outputFile.length()} bytes. Starting upload process.")
                 
-                // Start upload process in a coroutine
                 serviceScope.launch {
                     try {
                         // Get Drive service using last signed in account
                         val account = GoogleSignIn.getLastSignedInAccount(this@RecorderService)
                         if (account != null) {
                             val credential = GoogleAccountCredential.usingOAuth2(
-                                this@RecorderService, listOf(DriveScopes.DRIVE_FILE, DriveScopes.DRIVE)
+                                this@RecorderService, 
+                                listOf(DriveScopes.DRIVE_FILE, DriveScopes.DRIVE)
                             )
                             credential.selectedAccount = account.account
                             val driveService = Drive.Builder(
@@ -201,7 +200,7 @@ class RecorderService : Service() {
                                 credential
                             ).setApplicationName(getString(R.string.app_name)).build()
                             
-                            // Upload to Drive
+                            // Upload to Google Drive
                             val fileId = GoogleDriveUploader.uploadToDrive(
                                 this@RecorderService, 
                                 outputFile, 
@@ -211,67 +210,141 @@ class RecorderService : Service() {
                             if (fileId == null) {
                                 Log.w(TAG, "Upload failed or deferred (network/auth issue). File kept locally.")
                                 updateNotification("Upload failed. File saved locally.")
+                                notifyUploadComplete(null)
                             } else {
                                 Log.i(TAG, "Upload successful! Google Drive File ID: $fileId")
                                 updateNotification("Upload successful! File ID: $fileId")
                                 
-                                // Wait a few seconds to let the user see the success notification
-                                delay(3000)
+                                // Notify UI immediately of upload completion
+                                notifyUploadComplete(fileId)
                             }
                         } else {
                             Log.w(TAG, "No Google account available for upload")
-                            updateNotification("Upload failed: No Google account available")
+                            updateNotification("Upload failed: No Google account")
+                            notifyUploadComplete(null)
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error during upload process", e)
                         updateNotification("Error during upload: ${e.message}")
+                        notifyUploadComplete(null)
                     } finally {
-                        // Stop the service after upload attempt
+                        // Stop the service after upload attempt (success or failure)
                         stopSelf()
                     }
                 }
             } else {
-                // Invalid or empty recording file
+                // Handle invalid file case
                 Log.w(TAG, "Invalid or empty recording file: ${outputFile.absolutePath}")
                 updateNotification("Invalid recording. No file saved.")
                 if (::outputFile.isInitialized && outputFile.exists()) {
-                    try {
-                        outputFile.delete()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to delete invalid recording file", e)
-                    }
+                    outputFile.delete()
                 }
-                stopSelf() // Stop service as there's nothing to upload
+                notifyUploadComplete(null)
+                stopSelf()
             }
-
-        } catch (e: IllegalStateException) {
+        } catch (e: Exception) {
             Log.e(TAG, "Failed to stop MediaRecorder", e)
-            // Clean up resources and stop service even if stop fails
-            mediaRecorder?.reset()
-            mediaRecorder?.release()
-            mediaRecorder = null
+            if (mediaRecorder != null) {
+                try {
+                    mediaRecorder?.reset()
+                    mediaRecorder?.release()
+                } catch (e2: Exception) {
+                    Log.e(TAG, "Error releasing MediaRecorder", e2)
+                }
+                mediaRecorder = null
+            }
             isRecording = false
             isPaused = false
             if (::outputFile.isInitialized && outputFile.exists()) {
-                 outputFile.delete() // Attempt to delete potentially corrupt file
+                outputFile.delete() // Delete potentially corrupt file
             }
+            notifyUploadComplete(null)
             stopSelf()
-        } catch (e: Exception) {
-             Log.e(TAG, "An unexpected error occurred during stop/upload", e)
-             stopSelf() // Ensure service stops on other errors
         } finally {
-             // Release wakelock but don't stop foreground yet since we're uploading
-             releaseWakeLock()
+            releaseWakeLock()
         }
     }
 
+    private fun discardRecording() {
+        if (!isRecording && mediaRecorder == null) {
+            Log.w(TAG, "No active recording to discard")
+            notifyRecordingDiscarded()
+            stopSelf()
+            return
+        }
+        
+        Log.d(TAG, "Discarding recording...")
+        try {
+            // Release MediaRecorder resources
+            if (mediaRecorder != null) {
+                try {
+                    if (isRecording && !isPaused) {
+                        mediaRecorder?.stop()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping recorder", e)
+                }
+                
+                mediaRecorder?.reset()
+                mediaRecorder?.release()
+                mediaRecorder = null
+            }
+            
+            isRecording = false
+            isPaused = false
+            
+            // Delete the file if it exists
+            if (::outputFile.isInitialized && outputFile.exists()) {
+                if (outputFile.delete()) {
+                    Log.d(TAG, "Deleted recording file: ${outputFile.absolutePath}")
+                } else {
+                    Log.e(TAG, "Failed to delete recording file: ${outputFile.absolutePath}")
+                }
+            }
+            
+            // Notify UI that recording was discarded
+            notifyRecordingDiscarded()
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error discarding recording", e)
+            notifyRecordingDiscarded() // Ensure we still notify even on error
+        } finally {
+            releaseWakeLock()
+            stopSelf()
+        }
+    }
+
+    private fun notifyRecordingDiscarded() {
+        val intent = Intent(MainActivity.ACTION_RECORDING_STATUS).apply {
+            putExtra(MainActivity.EXTRA_STATUS, MainActivity.STATUS_RECORDING_DISCARDED)
+        }
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+        Log.d(TAG, "Sending recording discarded broadcast")
+        sendBroadcast(intent)
+    }
+
+    private fun notifyUploadComplete(fileId: String?) {
+        val intent = Intent(MainActivity.ACTION_RECORDING_STATUS).apply {
+            putExtra(MainActivity.EXTRA_STATUS, MainActivity.STATUS_UPLOAD_COMPLETED)
+            putExtra(MainActivity.EXTRA_FILE_ID, fileId ?: "")
+        }
+        
+        // Log before sending broadcast to confirm it's being sent
+        Log.d(TAG, "Sending upload completion broadcast with fileId: ${fileId ?: "null"}")
+        
+        // Add flags to ensure the broadcast can be received
+        intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+        sendBroadcast(intent)
+    }
+
     private fun createOutputFile(): File {
-        val mediaDir = File(getExternalFilesDir(null), "Music") // Standard directory
+        val mediaDir = File(getExternalFilesDir(null), "Music")
         if (!mediaDir.exists()) {
             mediaDir.mkdirs()
         }
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        return File(mediaDir, "REC_${timestamp}.3gp")
+        // Change extension from .3gp to .m4a
+        return File(mediaDir, "REC_${timestamp}.m4a")
     }
 
     private fun createNotificationChannel() {

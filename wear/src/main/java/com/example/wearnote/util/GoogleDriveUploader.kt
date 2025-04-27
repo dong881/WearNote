@@ -46,7 +46,8 @@ object GoogleDriveUploader {
             val fileMetadata = File()
             fileMetadata.name = localFile.name
             fileMetadata.parents = listOf(parentFolderId)
-            fileMetadata.mimeType = "audio/3gpp" // Adjust based on your recording format
+            // Change MIME type to match .m4a format
+            fileMetadata.mimeType = "audio/mp4" // MIME type for M4A audio files
 
             // File content
             val mediaContent = FileContent(fileMetadata.mimeType, localFile)

@@ -20,8 +20,19 @@ class NetworkChangeReceiver : BroadcastReceiver() {
                 Log.d(TAG, "Network is now available, processing pending uploads")
                 // Try to upload pending files when network becomes available
                 CoroutineScope(Dispatchers.IO).launch {
-                    GoogleDriveUploader.processPending(context)
+                    try {
+                        // Ensure PendingUploadsManager is initialized before processing
+                        PendingUploadsManager.initialize(context)
+                        PendingUploadsManager.processAllPendingUploads(context)
+                        
+                        // As a fallback, also try the legacy method
+                        GoogleDriveUploader.processPending(context)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error processing pending uploads on network change", e)
+                    }
                 }
+            } else {
+                Log.d(TAG, "Network is not available")
             }
         }
     }

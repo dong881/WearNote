@@ -34,6 +34,8 @@ import androidx.wear.compose.material.*
 import com.example.wearnote.service.RecorderService
 import com.example.wearnote.auth.ConfigHelper
 import com.example.wearnote.auth.KeystoreHelper
+import com.example.wearnote.service.PendingUploadsManager
+import com.example.wearnote.ui.PendingUploadsScreen
 import kotlinx.coroutines.delay
 
 // Google Sign-In imports
@@ -424,9 +426,7 @@ class MainActivity : ComponentActivity() {
         
         // Show initial UI
         setContent { 
-            WearNoteTheme {
-                InitialUI() 
-            }
+            InitialUI()
         }
     }
 
@@ -476,37 +476,90 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun InitialUI() {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
+        WearNoteTheme {
+            ScalingLazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                // Mic button
-                Button(
-                    onClick = { startRecording() },
-                    modifier = Modifier.size(80.dp),
-                    shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(
-                        backgroundColor = MaterialTheme.colors.primary,
-                        contentColor = Color.White
-                    )
-                ) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_mic),
-                        contentDescription = "Start Recording",
-                        modifier = Modifier.size(40.dp)
+                item {
+                    Text(
+                        text = getString(R.string.app_name),
+                        style = MaterialTheme.typography.title1,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
                 
-                Spacer(modifier = Modifier.height(12.dp))
+                item {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = { startRecording() },
+                        modifier = Modifier
+                            .fillMaxWidth(0.7f)
+                            .padding(vertical = 4.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            backgroundColor = MaterialTheme.colors.primary
+                        )
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_mic),
+                            contentDescription = "Start Recording",
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+//                        Text("Record")
+                    }
+                }
                 
-                Text(
-                    text = "Tap to start recording",
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    textAlign = TextAlign.Center
+                // Add Pending Uploads button 
+                item {
+                    val pendingUploadsCount = remember {
+                        mutableStateOf(0)
+                    }
+                    
+                    // Update count when screen is shown
+                    LaunchedEffect(Unit) {
+                        PendingUploadsManager.initialize(this@MainActivity)
+                        pendingUploadsCount.value = PendingUploadsManager.getPendingUploadCount()
+                    }
+                    
+                    // Observe changes in pending uploads
+                    LaunchedEffect(Unit) {
+                        PendingUploadsManager.pendingUploadsFlow.collect {
+                            pendingUploadsCount.value = it.size
+                        }
+                    }
+                    
+                    if (pendingUploadsCount.value > 0) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = { showPendingUploadsScreen() },
+                            modifier = Modifier
+                                .fillMaxWidth(0.7f)
+                                .padding(vertical = 4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                backgroundColor = Color.DarkGray
+                            )
+                        ) {
+                            Text("Pending (${pendingUploadsCount.value})")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Add the function to show the pending uploads screen
+    private fun showPendingUploadsScreen() {
+        setContent {
+            WearNoteTheme {
+                PendingUploadsScreen(
+                    onBackClick = { 
+                        showInitialUI(false)
+                        // Ensure we check pending uploads when returning to the main screen
+                        checkPendingUploads()
+                    }
                 )
             }
         }

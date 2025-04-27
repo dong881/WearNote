@@ -8,17 +8,35 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.util.Log
 import android.widget.Button
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
+import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.client.googleapis.json.GoogleJsonResponseException
+import com.google.api.client.http.javanet.NetHttpTransport
+import com.google.api.client.json.gson.GsonFactory
+import com.google.api.services.drive.Drive
+import com.google.api.services.drive.DriveScopes
+import com.google.android.gms.auth.api.signin.GoogleSignIn
 import kotlinx.coroutines.*
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
+import java.io.File
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import com.example.wearnote.model.PendingUpload
+import com.example.wearnote.service.GoogleDriveUploader
+import com.example.wearnote.service.PendingUploadsManager
+import com.example.wearnote.service.RecorderService
 
 class MainActivity : ComponentActivity() {
 
@@ -88,10 +106,14 @@ class MainActivity : ComponentActivity() {
             release()
         }
         recorder = null
-        stopService(Intent(this, RecorderService::class.java))
-
+        
         Toast.makeText(this, "Saved: $outputFile", Toast.LENGTH_SHORT).show()
-        uploadAndTrigger(outputFile)
+        
+        // Make sure we send the stop action and wait for the service to confirm
+        Intent(this, RecorderService::class.java).also { 
+            it.action = RecorderService.ACTION_STOP_RECORDING
+            startService(it)
+        }
     }
 
     private fun startForegroundService() {
@@ -100,27 +122,6 @@ class MainActivity : ComponentActivity() {
             startForegroundService(serviceIntent)
         } else {
             startService(Intent(this, RecorderService::class.java))
-        }
-    }
-
-    private fun uploadAndTrigger(filePath: String) {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                // 模擬得到 file_id
-                val fileId = "dummy_file_id_123456"
-                val url = URL("http://140.118.123.107:5000/process")
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.doOutput = true
-                conn.outputStream.use {
-                    it.write("""{"file_id":"$fileId"}""".toByteArray())
-                    it.flush()
-                }
-                println("Server response: ${conn.responseCode}")
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
         }
     }
 }
@@ -146,5 +147,11 @@ class RecorderService : Service() {
             .build()
 
         startForeground(1, notification)
+    }
+
+    companion object {
+        const val ACTION_START_AI_PROCESSING = "com.example.wearnote.ACTION_START_AI_PROCESSING"
+        const val ACTION_UPLOAD_AND_PROCESS = "com.example.wearnote.ACTION_UPLOAD_AND_PROCESS"
+        const val ACTION_STOP_RECORDING = "com.example.wearnote.ACTION_STOP_RECORDING"
     }
 }

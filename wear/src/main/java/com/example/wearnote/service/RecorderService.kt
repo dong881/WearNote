@@ -15,6 +15,13 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.wearnote.MainActivity
 import com.example.wearnote.R
+import com.example.wearnote.util.GoogleDriveUploader
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.client.http.javanet.NetHttpTransport
+import com.google.api.client.json.gson.GsonFactory
+import com.google.api.services.drive.Drive
+import com.google.api.services.drive.DriveScopes
 import kotlinx.coroutines.*
 import java.io.File
 import java.io.IOException
@@ -150,24 +157,19 @@ class RecorderService : Service() {
         }
     }
 
-
     private fun stopRecordingAndUpload() {
         if (!isRecording) {
             Log.w(TAG, "Recording not active, cannot stop.")
             // If the service was started but recording failed, it might still need stopping.
             if (mediaRecorder == null && !::outputFile.isInitialized) {
-                 stopSelf()
+                stopSelf()
             }
             return
         }
 
         Log.d(TAG, "Stopping recording...")
         try {
-            // Check if paused, resume briefly before stopping if necessary?
-            // Some implementations suggest this, but often stopping directly works.
-            // if (isPaused && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            //     mediaRecorder?.resume() // May not be needed
-            // }
+            // If paused, no need to resume before stopping
             mediaRecorder?.stop()
             mediaRecorder?.reset() // Reset before release
             mediaRecorder?.release()
@@ -176,33 +178,67 @@ class RecorderService : Service() {
             isPaused = false
             Log.d(TAG, "Recording stopped.")
 
+            // Update notification to show uploading status
+            updateNotification("Saving and uploading recording...")
+
             // Check if the file is valid (exists and has size > 0)
             if (::outputFile.isInitialized && outputFile.exists() && outputFile.length() > 100) { // Check size > 100 bytes
                 Log.d(TAG, "Recording saved: ${outputFile.absolutePath}, size: ${outputFile.length()} bytes. Starting upload process.")
+                
                 // Start upload process in a coroutine
                 serviceScope.launch {
-                    val fileId = GoogleDriveUploader.upload(this@RecorderService, outputFile)
-                    if (fileId == null) {
-                        Log.w(TAG, "Upload failed or deferred (network/auth issue). File enqueued.")
-                        // File is already enqueued by the upload function if needed
-                    } else {
-                        Log.i(TAG, "Upload successful! Google Drive File ID: $fileId")
-                        // TODO: Optional: Send fileId to your server API here if needed
-                        // Example: sendFileIdToServer(fileId)
-
-                        // File deletion is now handled within GoogleDriveUploader.upload on success
+                    try {
+                        // Get Drive service using last signed in account
+                        val account = GoogleSignIn.getLastSignedInAccount(this@RecorderService)
+                        if (account != null) {
+                            val credential = GoogleAccountCredential.usingOAuth2(
+                                this@RecorderService, listOf(DriveScopes.DRIVE_FILE, DriveScopes.DRIVE)
+                            )
+                            credential.selectedAccount = account.account
+                            val driveService = Drive.Builder(
+                                NetHttpTransport(),
+                                GsonFactory.getDefaultInstance(),
+                                credential
+                            ).setApplicationName(getString(R.string.app_name)).build()
+                            
+                            // Upload to Drive
+                            val fileId = GoogleDriveUploader.uploadToDrive(
+                                this@RecorderService, 
+                                outputFile, 
+                                driveService
+                            )
+                            
+                            if (fileId == null) {
+                                Log.w(TAG, "Upload failed or deferred (network/auth issue). File kept locally.")
+                                updateNotification("Upload failed. File saved locally.")
+                            } else {
+                                Log.i(TAG, "Upload successful! Google Drive File ID: $fileId")
+                                updateNotification("Upload successful! File ID: $fileId")
+                                
+                                // Wait a few seconds to let the user see the success notification
+                                delay(3000)
+                            }
+                        } else {
+                            Log.w(TAG, "No Google account available for upload")
+                            updateNotification("Upload failed: No Google account available")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error during upload process", e)
+                        updateNotification("Error during upload: ${e.message}")
+                    } finally {
+                        // Stop the service after upload attempt
+                        stopSelf()
                     }
-                    // Stop the service after upload attempt (success or enqueue)
-                    stopSelf()
                 }
             } else {
                 // Invalid or empty recording file
-                Log.w(TAG, "Invalid or empty recording file, deleting: ${outputFile.absolutePath}")
+                Log.w(TAG, "Invalid or empty recording file: ${outputFile.absolutePath}")
+                updateNotification("Invalid recording. No file saved.")
                 if (::outputFile.isInitialized && outputFile.exists()) {
                     try {
                         outputFile.delete()
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to delete invalid/empty recording file", e)
+                        Log.e(TAG, "Failed to delete invalid recording file", e)
                     }
                 }
                 stopSelf() // Stop service as there's nothing to upload
@@ -224,12 +260,10 @@ class RecorderService : Service() {
              Log.e(TAG, "An unexpected error occurred during stop/upload", e)
              stopSelf() // Ensure service stops on other errors
         } finally {
-             // Release wakelock and stop foreground state if not already handled by stopSelf()
+             // Release wakelock but don't stop foreground yet since we're uploading
              releaseWakeLock()
-             stopForeground(STOP_FOREGROUND_REMOVE) // Use REMOVE instead of true
         }
     }
-
 
     private fun createOutputFile(): File {
         val mediaDir = File(getExternalFilesDir(null), "Music") // Standard directory
@@ -298,7 +332,6 @@ class RecorderService : Service() {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
-
 
     override fun onBind(intent: Intent?): IBinder? = null
 

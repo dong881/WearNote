@@ -147,7 +147,7 @@ class MainActivity : ComponentActivity() {
     
     private fun createDriveService(account: GoogleSignInAccount) {
         val credential = GoogleAccountCredential.usingOAuth2(
-            this, listOf(DriveScopes.DRIVE_FILE)
+            this, listOf(DriveScopes.DRIVE_FILE, DriveScopes.DRIVE)
         )
         credential.selectedAccount = account.account
         driveService = Drive.Builder(
@@ -192,6 +192,7 @@ class MainActivity : ComponentActivity() {
     private fun startRecording() {
         Log.d(TAG, "Starting recording")
         Intent(this, RecorderService::class.java).also {
+            it.action = RecorderService.ACTION_START_RECORDING
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                 startForegroundService(it)
             else 
@@ -202,12 +203,14 @@ class MainActivity : ComponentActivity() {
     
     private fun stopRecording() {
         Log.d(TAG, "Stopping recording")
+        // Pass the state indicating we have a valid Drive service
         Intent(this, RecorderService::class.java).also { 
             it.action = RecorderService.ACTION_STOP_RECORDING 
+            // We don't finish() immediately to allow seeing the upload progress
+            // We'll use a broadcast receiver to be notified when upload completes
             startService(it)
         }
         currentRecordingState = RecordingState.IDLE
-        finish()
     }
     
     private fun togglePauseResumeRecording(isPaused: Boolean) {

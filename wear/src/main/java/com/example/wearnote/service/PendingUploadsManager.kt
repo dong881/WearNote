@@ -61,7 +61,7 @@ object PendingUploadsManager {
     fun addPendingUpload(
         context: Context, 
         file: File?, 
-        uploadType: PendingUpload.UploadType = PendingUpload.UploadType.DRIVE,
+        uploadType: PendingUpload.UploadType = PendingUpload.UploadType.BOTH,
         fileId: String? = null,
         failureReason: String? = null
     ) {
@@ -83,7 +83,7 @@ object PendingUploadsManager {
         } else {
             Log.d(TAG, "Network available, not adding to pending list: ${file.name}")
             // Attempt immediate upload if we have internet
-            if (uploadType == PendingUpload.UploadType.DRIVE) {
+            if (uploadType == PendingUpload.UploadType.BOTH) {
                 // Launch a coroutine to handle the upload
                 GlobalScope.launch(Dispatchers.IO) {
                     retryDriveUpload(context, file)
@@ -99,7 +99,7 @@ object PendingUploadsManager {
         context: Context,
         fileName: String,
         filePath: String,
-        uploadType: PendingUpload.UploadType = PendingUpload.UploadType.DRIVE,
+        uploadType: PendingUpload.UploadType = PendingUpload.UploadType.BOTH,
         fileId: String? = null,
         failureReason: String? = null
     ) {
@@ -257,27 +257,50 @@ object PendingUploadsManager {
             PendingUpload.UploadType.BOTH -> {
                 // First retry upload to Drive, then AI processing if successful
                 val driveSuccess = retryDriveUpload(context, file)
-                if (driveSuccess && pendingUpload.fileId != null) {
-                    // Now attempt AI processing
-                    val intent = Intent(context, RecorderService::class.java).apply {
-                        action = RecorderService.ACTION_START_AI_PROCESSING
-                        putExtra("file_id", pendingUpload.fileId)
-                        putExtra("file_path", pendingUpload.filePath)
-                        putExtra("is_retry", true)
-                    }
+                
+                if (driveSuccess) {
+                    Log.d(TAG, "Drive upload succeeded for ${pendingUpload.fileName}")
                     
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(intent)
+                    // Get the fileId (either existing or newly obtained from lastUploadedFileId)
+                    val actualFileId = pendingUpload.fileId ?: lastUploadedFileId
+                    
+                    if (actualFileId != null) {
+                        // Now attempt AI processing
+                        val intent = Intent(context, RecorderService::class.java).apply {
+                            action = RecorderService.ACTION_START_AI_PROCESSING
+                            putExtra("file_id", actualFileId)
+                            putExtra("file_path", pendingUpload.filePath)
+                            putExtra("is_retry", true)
+                        }
+                        
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            context.startForegroundService(intent)
+                        } else {
+                            context.startService(intent)
+                        }
+                        
+                        // Remove the BOTH task but note that AI_PROCESSING might add a new task later if it fails
+                        removePendingUpload(context, pendingUpload.filePath)
+                        Log.d(TAG, "Drive upload succeeded, started AI processing for ${pendingUpload.fileName}")
+                        return@withContext true
                     } else {
-                        context.startService(intent)
+                        // This is unusual - succeeded but no fileId
+                        Log.e(TAG, "Drive upload succeeded but no fileId available for ${pendingUpload.fileName}")
+                        
+                        // Convert to an AI_PROCESSING task with failure reason
+                        addPendingUploadByPath(
+                            context, 
+                            pendingUpload.fileName,
+                            pendingUpload.filePath,
+                            PendingUpload.UploadType.AI_PROCESSING,
+                            null,
+                            "Drive upload succeeded but fileId not available"
+                        )
+                        removePendingUpload(context, pendingUpload.filePath)
+                        return@withContext false
                     }
-                    
-                    // Remove from BOTH type but may be added again as AI_PROCESSING if that part fails
-                    removePendingUpload(context, pendingUpload.filePath)
-                    Log.d(TAG, "Drive upload succeeded, started AI processing for ${pendingUpload.fileName}")
-                    return@withContext true
                 } else {
-                    Log.e(TAG, "Drive upload failed or no fileId for ${pendingUpload.fileName}")
+                    Log.e(TAG, "Drive upload failed for ${pendingUpload.fileName}")
                     return@withContext false
                 }
             }
@@ -318,7 +341,8 @@ object PendingUploadsManager {
                 // Update existing entry with new error message
                 val updatedUpload = existingUpload.copy(
                     failureReason = message ?: "Unknown AI processing error",
-                    fileId = fileId ?: existingUpload.fileId
+                    fileId = fileId ?: existingUpload.fileId,
+                    uploadType = PendingUpload.UploadType.AI_PROCESSING  // Always set type to AI_PROCESSING for retries
                 )
                 pendingUploads[filePath] = updatedUpload
                 Log.d(TAG, "Updated existing AI processing entry: $filePath")
@@ -328,7 +352,8 @@ object PendingUploadsManager {
                 if (foundByFileId != null) {
                     // Update existing entry found by fileId
                     val updatedUpload = foundByFileId.copy(
-                        failureReason = message ?: "Unknown AI processing error"
+                        failureReason = message ?: "Unknown AI processing error",
+                        uploadType = PendingUpload.UploadType.AI_PROCESSING  // Always set type to AI_PROCESSING for retries
                     )
                     pendingUploads[foundByFileId.filePath] = updatedUpload
                     Log.d(TAG, "Updated existing AI processing entry found by fileId: ${foundByFileId.filePath}")

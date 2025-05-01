@@ -40,7 +40,7 @@ object GoogleDriveUploader {
             PendingUploadsManager.addPendingUpload(
                 context, 
                 file, 
-                PendingUpload.UploadType.DRIVE, 
+                PendingUpload.UploadType.BOTH, 
                 null, 
                 "No internet connection"
             )
@@ -58,7 +58,7 @@ object GoogleDriveUploader {
             PendingUploadsManager.addPendingUpload(
                 context, 
                 file, 
-                PendingUpload.UploadType.DRIVE, 
+                PendingUpload.UploadType.BOTH, 
                 null, 
                 "Not signed in to Google Account"
             )
@@ -91,7 +91,7 @@ object GoogleDriveUploader {
                 PendingUploadsManager.addPendingUpload(
                     context, 
                     file, 
-                    PendingUpload.UploadType.DRIVE, 
+                    PendingUpload.UploadType.BOTH, 
                     null, 
                     "Failed to create folder"
                 )
@@ -155,7 +155,7 @@ object GoogleDriveUploader {
             PendingUploadsManager.addPendingUpload(
                 context, 
                 file, 
-                PendingUpload.UploadType.DRIVE, 
+                PendingUpload.UploadType.BOTH, 
                 null, 
                 e.message ?: "Upload error"
             )

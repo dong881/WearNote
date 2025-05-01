@@ -214,7 +214,7 @@ private fun PendingUploadItem(
                     painter = when(pendingUpload.uploadType) {
                         PendingUpload.UploadType.DRIVE -> painterResource(id = R.drawable.ic_cloud_upload)
                         PendingUpload.UploadType.AI_PROCESSING -> painterResource(id = R.drawable.ic_psychology)
-                        PendingUpload.UploadType.BOTH -> painterResource(id = R.drawable.ic_auto_fix)
+                        PendingUpload.UploadType.BOTH -> painterResource(id = R.drawable.ic_cloud_upload)
                     },
                     contentDescription = "Upload type",
                     tint = primaryColor,

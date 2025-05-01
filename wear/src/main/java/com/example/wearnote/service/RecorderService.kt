@@ -592,14 +592,14 @@ class RecorderService : Service() {
                             val jsonResponse = JSONObject(responseBody)
                             val success = jsonResponse.optBoolean("success", false)
                             
+                            // Use consistent file path format for AI processing tasks
+                            val aiProcessingFilePath = "$fileId.m4a"
+                            
                             if (success) {
                                 // Successfully submitted for processing
                                 val jobId = jsonResponse.optString("job_id", "")
-                                val message = jsonResponse.optString("message", "")
+                                val message = jsonResponse.optString("message", "Processing started")
                                 Log.d(TAG, "AI processing job submitted: $jobId, message: $message")
-                                
-                                // Use consistent file path format for AI processing tasks
-                                val aiProcessingFilePath = "$fileId.m4a"
                                 
                                 // Handle success in PendingUploadsManager (remove from pending list)
                                 PendingUploadsManager.handleAIProcessingResult(
@@ -617,10 +617,7 @@ class RecorderService : Service() {
                                 val errorMessage = jsonResponse.optString("error", "Unknown error")
                                 Log.e(TAG, "AI processing failed: $errorMessage")
                                 
-                                // Use consistent file path format for AI processing tasks
-                                val aiProcessingFilePath = "$fileId.m4a"
-                                
-                                // Add to pending uploads with error message
+                                // Always add to pending uploads when AI processing fails
                                 PendingUploadsManager.handleAIProcessingResult(
                                     this@RecorderService,
                                     aiProcessingFilePath,
@@ -665,9 +662,11 @@ class RecorderService : Service() {
                     } else {
                         // HTTP error
                         Log.e(TAG, "AI processing request failed with code: ${response.code}")
+                        
+                        // Always add to pending uploads for retry
                         PendingUploadsManager.handleAIProcessingResult(
                             this@RecorderService,
-                            "Processing_$fileId.m4a",
+                            "$fileId.m4a",
                             fileId,
                             false,
                             "Server error (${response.code})"

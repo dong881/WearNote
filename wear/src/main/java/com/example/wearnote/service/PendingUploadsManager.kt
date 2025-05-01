@@ -156,6 +156,18 @@ object PendingUploadsManager {
         pendingUploads.remove(filePath)
         saveToPrefs(context)
         updateFlow()
+        
+        // Also delete the file from device storage if it exists
+        val file = File(filePath)
+        if (file.exists()) {
+            val deleted = file.delete()
+            if (deleted) {
+                Log.d(TAG, "Deleted file from device: $filePath")
+            } else {
+                Log.e(TAG, "Failed to delete file from device: $filePath")
+            }
+        }
+        
         Log.d(TAG, "Removed pending upload: $filePath")
     }
     

@@ -17,12 +17,14 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -88,6 +90,7 @@ class MainActivity : ComponentActivity() {
     private val fileId = mutableStateOf<String?>(null)
     private val isRecordingStartConfirmed = mutableStateOf(false)
     private val isAutoStartInProgress = mutableStateOf(false)
+    private val userInteracted = mutableStateOf(false)
     
     // Improved broadcast receiver with more logging
     private val recordingStatusReceiver = object : BroadcastReceiver() {
@@ -228,7 +231,8 @@ class MainActivity : ComponentActivity() {
         if (currentRecordingState != RecordingState.RECORDING && currentRecordingState != RecordingState.PAUSED) {
             Log.d(TAG, "Auto-starting recording and waiting for confirmation")
             
-            // Reset confirmation flag
+            // Reset interaction flag and confirmation flags
+            userInteracted.value = false
             isRecordingStartConfirmed.value = false
             isAutoStartInProgress.value = true
             
@@ -238,8 +242,13 @@ class MainActivity : ComponentActivity() {
             // Set a longer timeout to wait for confirmation or timeout
             Handler(Looper.getMainLooper()).postDelayed({
                 if (!isRecordingStartConfirmed.value && isAutoStartInProgress.value) {
-                    Log.d(TAG, "Recording start confirmation timed out, returning to home anyway")
-                    moveTaskToBack(true)
+                    // Only return to home if user hasn't interacted
+                    if (!userInteracted.value) {
+                        Log.d(TAG, "No user interaction detected, returning to home")
+                        moveTaskToBack(true)
+                    } else {
+                        Log.d(TAG, "User interaction detected, staying in app")
+                    }
                     isAutoStartInProgress.value = false
                 }
             }, 3000) // 3-second timeout
@@ -452,13 +461,20 @@ class MainActivity : ComponentActivity() {
         }
         
         if (autoStartRecording) {
+            // Reset the interaction flag
+            userInteracted.value = false
+            
             // Start recording automatically and return to home
             Handler(Looper.getMainLooper()).postDelayed({
                 startRecording()
                 
-                // Return to home screen after a short delay
+                // Return to home screen after a short delay, but only if no interaction
                 Handler(Looper.getMainLooper()).postDelayed({
-                    moveTaskToBack(true)
+                    if (!userInteracted.value) {
+                        moveTaskToBack(true)
+                    } else {
+                        Log.d(TAG, "User interaction detected, staying in app")
+                    }
                 }, 1000)
             }, 500)
         }
@@ -612,7 +628,13 @@ class MainActivity : ComponentActivity() {
         }
         
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures { 
+                        userInteracted.value = true
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
             Column(

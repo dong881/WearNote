@@ -256,7 +256,7 @@ private fun PendingUploadItem(
                     Icon(
                         painter = painterResource(id = R.drawable.ic_refresh),
                         contentDescription = "Retry upload",
-                        tint = primaryColor,
+                        tint = Color.White,
                         modifier = Modifier.size(24.dp) // Increased from 20dp
                     )
                 }

@@ -248,6 +248,7 @@ object PendingUploadsManager {
                     
                     Log.d(TAG, "Started AI processing retry for ${pendingUpload.fileName}")
                     return@withContext true // Just indicate we started the retry, not that it succeeded
+                    // Note: The actual success/failure will be handled by handleAIProcessingResult
                 } else {
                     Log.e(TAG, "Cannot retry AI processing without a fileId")
                     return@withContext false
@@ -281,6 +282,95 @@ object PendingUploadsManager {
                 }
             }
         }
+    }
+    
+    /**
+     * Handle the result of AI processing
+     * To be called from RecorderService after the AI processing API call
+     */
+    fun handleAIProcessingResult(
+        context: Context, 
+        filePath: String, 
+        fileId: String?, 
+        isSuccess: Boolean, 
+        message: String?
+    ) {
+        Log.d(TAG, "Handling AI processing result - success: $isSuccess, message: $message, fileId: $fileId")
+        
+        if (isSuccess) {
+            // If successful, first try to remove by filePath
+            val removed = pendingUploads.remove(filePath) != null
+            
+            // If that didn't work and we have a fileId, find and remove by fileId
+            if (!removed && fileId != null) {
+                removeByFileId(context, fileId)
+                Log.d(TAG, "AI processing succeeded, removed by fileId: $fileId")
+            } else if (removed) {
+                Log.d(TAG, "AI processing succeeded, removed from pending list: $filePath")
+            } else {
+                Log.d(TAG, "AI processing succeeded but no matching entry found to remove")
+            }
+        } else {
+            // If failed, update or add to pending uploads with the error message
+            val existingUpload = pendingUploads[filePath]
+            
+            if (existingUpload != null) {
+                // Update existing entry with new error message
+                val updatedUpload = existingUpload.copy(
+                    failureReason = message ?: "Unknown AI processing error",
+                    fileId = fileId ?: existingUpload.fileId
+                )
+                pendingUploads[filePath] = updatedUpload
+                Log.d(TAG, "Updated existing AI processing entry: $filePath")
+            } else if (fileId != null) {
+                // Try to find by fileId if direct path lookup failed
+                val foundByFileId = findByFileId(fileId)
+                if (foundByFileId != null) {
+                    // Update existing entry found by fileId
+                    val updatedUpload = foundByFileId.copy(
+                        failureReason = message ?: "Unknown AI processing error"
+                    )
+                    pendingUploads[foundByFileId.filePath] = updatedUpload
+                    Log.d(TAG, "Updated existing AI processing entry found by fileId: ${foundByFileId.filePath}")
+                } else {
+                    // Create a new entry if nothing found
+                    val displayName = "Processing_$fileId"
+                    addPendingUploadByPath(
+                        context,
+                        displayName,
+                        "$fileId.m4a", // Consistent path format for AI processing tasks
+                        PendingUpload.UploadType.AI_PROCESSING,
+                        fileId,
+                        message ?: "Unknown AI processing error"
+                    )
+                    Log.d(TAG, "Added new AI processing entry as no existing one found")
+                }
+            } else {
+                // Create a new entry if it doesn't exist and no fileId provided
+                val displayName = File(filePath).name
+                addPendingUploadByPath(
+                    context,
+                    displayName,
+                    filePath,
+                    PendingUpload.UploadType.AI_PROCESSING,
+                    fileId,
+                    message ?: "Unknown AI processing error"
+                )
+                Log.d(TAG, "Added new AI processing entry: $filePath")
+            }
+            Log.d(TAG, "AI processing failed, kept in pending list")
+        }
+        
+        // Save changes and update flow
+        saveToPrefs(context)
+        updateFlow()
+    }
+    
+    /**
+     * Find a pending upload by fileId
+     */
+    private fun findByFileId(fileId: String): PendingUpload? {
+        return pendingUploads.values.firstOrNull { it.fileId == fileId }
     }
     
     /**

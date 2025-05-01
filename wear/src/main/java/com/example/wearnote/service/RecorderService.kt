@@ -587,58 +587,91 @@ class RecorderService : Service() {
                     val response = processingClient.newCall(request).execute()
                     val responseBody = response.body?.string()
 
-                    if (response.isSuccessful && responseBody != null) {
-                        val jsonResponse = JSONObject(responseBody)
-                        if (jsonResponse.optBoolean("success", false)) {
-                            // New success format with job_id
-                            val jobId = jsonResponse.optString("job_id", "")
-                            val message = jsonResponse.optString("message", "Processing in background")
+                    if (responseBody != null) {
+                        try {
+                            val jsonResponse = JSONObject(responseBody)
+                            val success = jsonResponse.optBoolean("success", false)
                             
-                            Log.i(TAG, "AI processing job submitted successfully! Job ID: $jobId")
-                            Log.i(TAG, "Message: $message")
+                            if (success) {
+                                // Successfully submitted for processing
+                                val jobId = jsonResponse.optString("job_id", "")
+                                val message = jsonResponse.optString("message", "")
+                                Log.d(TAG, "AI processing job submitted: $jobId, message: $message")
+                                
+                                // Use consistent file path format for AI processing tasks
+                                val aiProcessingFilePath = "$fileId.m4a"
+                                
+                                // Handle success in PendingUploadsManager (remove from pending list)
+                                PendingUploadsManager.handleAIProcessingResult(
+                                    this@RecorderService,
+                                    aiProcessingFilePath,
+                                    fileId,
+                                    true,
+                                    message
+                                )
+                                
+                                // Update notification to show success
+                                showProcessingSuccessNotification(message)
+                            } else {
+                                // Processing failed with a clear error
+                                val errorMessage = jsonResponse.optString("error", "Unknown error")
+                                Log.e(TAG, "AI processing failed: $errorMessage")
+                                
+                                // Use consistent file path format for AI processing tasks
+                                val aiProcessingFilePath = "$fileId.m4a"
+                                
+                                // Add to pending uploads with error message
+                                PendingUploadsManager.handleAIProcessingResult(
+                                    this@RecorderService,
+                                    aiProcessingFilePath,
+                                    fileId,
+                                    false,
+                                    errorMessage
+                                )
+                                
+                                showProcessingFailureNotification(errorMessage)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error parsing AI processing response", e)
                             
-                            // Show notification that job is processing in background
-                            val notificationBuilder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
-                                .setSmallIcon(R.drawable.ic_mic)
-                                .setContentTitle("AI Analysis In Progress")
-                                .setContentText(message)
-                                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                                .setOngoing(true)
+                            // Use consistent file path format for AI processing tasks
+                            val aiProcessingFilePath = "$fileId.m4a"
                             
-                            val notificationManager = ContextCompat.getSystemService(
-                                applicationContext,
-                                NotificationManager::class.java
-                            )
-                            notificationManager?.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
-                        } else {
-                            // Error case in response
-                            val errorMessage = jsonResponse.optString("error", "Unknown error occurred")
-                            Log.e(TAG, "AI processing API returned error: $errorMessage")
-                            
-                            // Add to pending uploads when API returns an error using path method
-                            PendingUploadsManager.addPendingUploadByPath(
+                            // Add to pending uploads with the exception message
+                            PendingUploadsManager.handleAIProcessingResult(
                                 this@RecorderService,
-                                "Processing_$fileId.m4a",
-                                "$fileId.m4a",
-                                PendingUpload.UploadType.AI_PROCESSING,
+                                aiProcessingFilePath,
                                 fileId,
-                                "API error: $errorMessage"
+                                false,
+                                "JSON parsing error: ${e.message}"
                             )
                             
-                            showProcessingFailureNotification("Error: $errorMessage")
+                            showProcessingFailureNotification("Response parsing error")
                         }
+                    } else if (response.isSuccessful) {
+                        // Empty success response
+                        Log.d(TAG, "AI processing request successful but empty response")
+                        
+                        // Use consistent file path format for AI processing tasks
+                        val aiProcessingFilePath = "$fileId.m4a"
+                        
+                        PendingUploadsManager.handleAIProcessingResult(
+                            this@RecorderService,
+                            aiProcessingFilePath,
+                            fileId,
+                            true,
+                            "Processing started"
+                        )
                     } else {
-                        // Notify failure and add to pending uploads
-                        PendingUploadsManager.addPendingUploadByPath(
+                        // HTTP error
+                        Log.e(TAG, "AI processing request failed with code: ${response.code}")
+                        PendingUploadsManager.handleAIProcessingResult(
                             this@RecorderService,
                             "Processing_$fileId.m4a",
-                            "$fileId.m4a",
-                            PendingUpload.UploadType.AI_PROCESSING,
                             fileId,
-                            "API responded with code ${response.code}"
+                            false,
+                            "Server error (${response.code})"
                         )
-                        
-                        Log.e(TAG, "AI processing request failed with code: ${response.code}")
                         showProcessingFailureNotification("Server error (${response.code})")
                     }
                 } catch (e: Exception) {
@@ -699,6 +732,25 @@ class RecorderService : Service() {
             notificationManager?.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
         } catch (e: Exception) {
             Log.e(TAG, "Error showing failure notification", e)
+        }
+    }
+
+    private fun showProcessingSuccessNotification(message: String) {
+        try {
+            val notificationBuilder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_mic)
+                .setContentTitle("AI Analysis Success")
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+
+            val notificationManager = ContextCompat.getSystemService(
+                applicationContext,
+                NotificationManager::class.java
+            )
+            notificationManager?.notify(NOTIFICATION_ID_AI_PROCESS, notificationBuilder.build())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error showing success notification", e)
         }
     }
 

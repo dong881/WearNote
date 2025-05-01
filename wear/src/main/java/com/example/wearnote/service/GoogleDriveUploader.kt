@@ -121,16 +121,16 @@ object GoogleDriveUploader {
             // Add permission to make the file accessible to anyone with the link
             if (fileId != null) {
                 try {
-                    // Create a permission for anyone with the link to view the file
+                    // Create a permission for anyone with the link to edit the file
                     val permission = Permission()
                         .setType("anyone")
-                        .setRole("reader")
+                        .setRole("writer")  // Changed from "reader" to "writer" to allow editing
 
                     driveService.permissions().create(fileId, permission)
                         .setFields("id")
                         .execute()
 
-                    Log.i(TAG, "Set file permission to anyone with link: $fileId")
+                    Log.i(TAG, "Set file permission to anyone with link (with edit access): $fileId")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error setting file permissions: ${e.message}")
                     // Don't fail the upload if just permission setting fails

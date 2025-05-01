@@ -652,6 +652,7 @@ class MainActivity : ComponentActivity() {
                 // Pause/Resume Button
                 Button(
                     onClick = {
+                        userInteracted.value = true  // Set flag when button is pressed
                         togglePauseResumeRecording(isPausedState.value)
                         isPausedState.value = !isPausedState.value
                     },
@@ -685,7 +686,10 @@ class MainActivity : ComponentActivity() {
                 ) {
                     // Stop Button
                     Button(
-                        onClick = { stopRecording() },
+                        onClick = { 
+                            userInteracted.value = true  // Set flag when button is pressed
+                            stopRecording() 
+                        },
                         modifier = Modifier.size(60.dp),
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(
@@ -702,7 +706,10 @@ class MainActivity : ComponentActivity() {
                     
                     // New Discard Button
                     Button(
-                        onClick = { discardRecording() },
+                        onClick = { 
+                            userInteracted.value = true  // Set flag when button is pressed
+                            discardRecording() 
+                        },
                         modifier = Modifier.size(60.dp),
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(

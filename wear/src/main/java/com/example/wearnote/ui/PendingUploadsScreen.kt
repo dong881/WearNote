@@ -1,7 +1,17 @@
 package com.example.wearnote.ui
 
 import android.content.Context
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.util.Log
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -9,7 +19,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -25,6 +37,9 @@ import com.example.wearnote.model.PendingUpload
 import com.example.wearnote.service.PendingUploadsManager
 import kotlinx.coroutines.launch
 import java.io.File
+import androidx.compose.animation.animateColorAsState
+
+private const val TAG = "PendingUploadsScreen"
 
 @Composable
 fun PendingUploadsScreen(onBackClick: () -> Unit) {
@@ -83,9 +98,10 @@ fun PendingUploadsScreen(onBackClick: () -> Unit) {
                     
                     Spacer(modifier = Modifier.height(16.dp))
                     
-                    Button(
+                    // Enhanced Button with animation
+                    AnimatedButton(
                         onClick = onBackClick,
-                        colors = ButtonDefaults.buttonColors(backgroundColor = primaryColor),
+                        backgroundColor = primaryColor,
                         modifier = Modifier
                             .fillMaxWidth(0.8f)
                             .height(40.dp) // Larger button
@@ -149,9 +165,9 @@ fun PendingUploadsScreen(onBackClick: () -> Unit) {
                     }
                     
                     item {
-                        Button(
+                        AnimatedButton(
                             onClick = onBackClick,
-                            colors = ButtonDefaults.buttonColors(backgroundColor = primaryColor),
+                            backgroundColor = primaryColor,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp)
@@ -191,6 +207,14 @@ private fun PendingUploadItem(
     onRetry: () -> Unit,
     onDelete: () -> Unit
 ) {
+    // Add debug log to track upload issues
+    val context = LocalContext.current
+    LaunchedEffect(pendingUpload) {
+        if (pendingUpload.failureReason != null) {
+            Log.d(TAG, "Item showing failed upload: ${pendingUpload.fileName}, reason: ${pendingUpload.failureReason}")
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -248,9 +272,10 @@ private fun PendingUploadItem(
                     .padding(top = 4.dp), // Increased from 1dp
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // Retry button
-                SmallButton(
+                // Retry button with animation
+                AnimatedSmallButton(
                     onClick = onRetry,
+                    backgroundColor = Color(0xFF525252),
                     modifier = Modifier.size(30.dp) // Increased from 26dp
                 ) {
                     Icon(
@@ -261,9 +286,10 @@ private fun PendingUploadItem(
                     )
                 }
                 
-                // Delete button
-                SmallButton(
+                // Delete button with animation
+                AnimatedSmallButton(
                     onClick = onDelete,
+                    backgroundColor = Color(0xFF525252),
                     modifier = Modifier.size(30.dp) // Increased from 26dp
                 ) {
                     Icon(
@@ -278,24 +304,257 @@ private fun PendingUploadItem(
     }
 }
 
+// Function to trigger vibration with pattern
+private fun vibrateDevice(context: Context, durationMs: Long = 20, isClickEffect: Boolean = false) {
+    try {
+        if (isClickEffect && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // Use a double-pulse pattern for clicks for better feedback
+            val pattern = longArrayOf(0, 20, 60, 20)
+            val amplitudes = intArrayOf(0, 255, 0, 255)
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                val vibrator = vibratorManager.defaultVibrator
+                val vibrationEffect = VibrationEffect.createWaveform(pattern, amplitudes, -1)
+                vibrator.vibrate(vibrationEffect)
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                val vibrationEffect = VibrationEffect.createWaveform(pattern, amplitudes, -1)
+                vibrator.vibrate(vibrationEffect)
+            }
+        } else {
+            // Use the existing simple vibration for other cases
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                val vibrator = vibratorManager.defaultVibrator
+                vibrator.vibrate(
+                    VibrationEffect.createOneShot(
+                        durationMs,
+                        VibrationEffect.DEFAULT_AMPLITUDE
+                    )
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator.vibrate(
+                        VibrationEffect.createOneShot(
+                            durationMs,
+                            VibrationEffect.DEFAULT_AMPLITUDE
+                        )
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(durationMs)
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e(TAG, "Error vibrating device", e)
+    }
+}
+
+// Use more visible animations for small buttons with haptic feedback
 @Composable
-fun SmallButton(
+fun AnimatedSmallButton(
     onClick: () -> Unit,
+    backgroundColor: Color,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit
 ) {
-    Button(
-        onClick = onClick,
-        modifier = modifier,
-        colors = ButtonDefaults.buttonColors(backgroundColor = Color(0xFF525252)) // Slightly lighter for better visibility
+    val context = LocalContext.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed = interactionSource.collectIsPressedAsState()
+    
+    // Track if button was recently clicked for extra animation
+    var wasJustClicked by remember { mutableStateOf(false) }
+    
+    // Extra flash effect after click
+    val flashAlpha by animateFloatAsState(
+        targetValue = if (wasJustClicked) 0f else if (isPressed.value) 0.6f else 0f,
+        animationSpec = tween(
+            durationMillis = if (wasJustClicked) 300 else 100,
+            easing = if (wasJustClicked) FastOutSlowInEasing else LinearEasing
+        )
+    )
+    
+    // More dramatic pulse animation
+    val pulseAnim = rememberInfiniteTransition()
+    val pulseScale by pulseAnim.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.15f, // More dramatic pulse
+        animationSpec = infiniteRepeatable(
+            animation = tween(400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        )
+    )
+    
+    // Apply pulse only when pressed with more dramatic scaling
+    val finalScale = if (wasJustClicked) 
+                        1.2f  // Pop out effect after click
+                     else if (isPressed.value) 
+                        pulseScale * 0.6f  // More dramatic shrink when pressed
+                     else 
+                        1f
+    
+    // Trigger haptic feedback on press
+    LaunchedEffect(isPressed.value) {
+        if (isPressed.value) {
+            vibrateDevice(context, 15) // Shorter, quicker vibration for press
+        }
+    }
+    
+    // More dramatic rotation with overshoot
+    val rotation by animateFloatAsState(
+        targetValue = if (wasJustClicked) 360f else if (isPressed.value) 180f else 0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioLowBouncy, // More bouncy animation
+            stiffness = Spring.StiffnessMediumLow
+        )
+    )
+    
+    // Flash effect with dramatically different color
+    val color by animateColorAsState(
+        targetValue = if (wasJustClicked)
+                        Color(0xFFE0BBE4) // Light purple flash when released
+                      else if (isPressed.value) 
+                        Color(0xFFDDDDDD) // Almost white when pressed
+                      else 
+                        backgroundColor,
+        animationSpec = tween(durationMillis = 150) // Faster color change
+    )
+    
+    // Create our own highlight effect 
+    val highlightColor = Color.White.copy(alpha = flashAlpha)
+    
+    // Handle click with animations
+    fun handleClick() {
+        wasJustClicked = true
+        vibrateDevice(context, 40, true) // Pattern vibration for click
+        onClick()
+        
+        // Reset the "just clicked" state after animation completes
+        kotlinx.coroutines.MainScope().launch {
+            kotlinx.coroutines.delay(300)
+            wasJustClicked = false
+        }
+    }
+    
+    Box(
+        modifier = modifier
+            .scale(finalScale)
+            .clip(CircleShape)
+            .background(color)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = { handleClick() }
+            ),
+        contentAlignment = Alignment.Center
     ) {
+        // Add a highlight overlay
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(4.dp), // Apply padding to the Box instead of using contentPadding
+                .background(highlightColor)
+        )
+        
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(4.dp)
+                .graphicsLayer {
+                    rotationZ = rotation
+                },
             contentAlignment = Alignment.Center
         ) {
             content()
         }
+    }
+}
+
+// Enhanced animation for larger buttons with haptic feedback
+@Composable
+fun AnimatedButton(
+    onClick: () -> Unit,
+    backgroundColor: Color,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    val context = LocalContext.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed = interactionSource.collectIsPressedAsState()
+    
+    // Pulse animation when pressed
+    val pulseAnim = rememberInfiniteTransition()
+    val pulseScale by pulseAnim.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(300, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        )
+    )
+    
+    // Apply pulse only when pressed
+    val finalScale = if (isPressed.value) pulseScale * 0.9f else 1f
+    
+    // Trigger haptic feedback on press
+    LaunchedEffect(isPressed.value) {
+        if (isPressed.value) {
+            vibrateDevice(context)
+        }
+    }
+    
+    // Shadow elevation animation
+    val elevation by animateFloatAsState(
+        targetValue = if (isPressed.value) 1f else 12f,  // More dramatic elevation change
+        animationSpec = tween(durationMillis = 100)
+    )
+    
+    // Color animation with glow effect
+    val buttonColor by animateColorAsState(
+        targetValue = if (isPressed.value) {
+            Color(0xFF00BCD4)  // Bright teal/cyan when pressed
+        } else {
+            backgroundColor
+        },
+        animationSpec = tween(durationMillis = 100)
+    )
+    
+    // Create our own highlight effect instead of using rememberRipple
+    val highlightColor = if (isPressed.value) Color.White.copy(alpha = 0.2f) else Color.Transparent
+    
+    Box(
+        modifier = modifier
+            .scale(finalScale)
+            .clip(RoundedCornerShape(12.dp))
+            .graphicsLayer {
+                this.shadowElevation = elevation
+                this.shape = RoundedCornerShape(12.dp)
+            }
+            .background(buttonColor)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null, // Don't use default indication
+                onClick = {
+                    vibrateDevice(context, 40, true)  // Use pattern vibration
+                    onClick()
+                }
+            )
+            .padding(8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        // Add a highlight overlay when pressed
+        if (isPressed.value) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(highlightColor)
+            )
+        }
+        
+        content()
     }
 }

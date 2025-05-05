@@ -534,4 +534,57 @@ object PendingUploadsManager {
     private fun updateFlow() {
         _pendingUploadsFlow.value = getPendingUploads()
     }
+
+    /**
+     * Scan the Music directory for audio files that should be added to the pending uploads list
+     * This helps recover files that might be left over after app crashes or other issues
+     */
+    fun scanLocalMusicDirectory(context: Context): Int {
+        val musicDir = File("/storage/emulated/0/Android/data/com.example.wearnote/files/Music")
+        if (!musicDir.exists() || !musicDir.isDirectory) {
+            Log.d(TAG, "Music directory doesn't exist or can't be accessed: ${musicDir.absolutePath}")
+            return 0
+        }
+
+        val files = musicDir.listFiles()
+        if (files == null || files.isEmpty()) {
+            Log.d(TAG, "No files found in Music directory")
+            return 0
+        }
+
+        Log.d(TAG, "Found ${files.size} files in Music directory, checking for new uploads")
+        
+        var newFilesAdded = 0
+        
+        for (file in files) {
+            // Skip non-files
+            if (!file.isFile) {
+                continue
+            }
+            
+            // Skip if already in pending uploads list
+            if (pendingUploads.containsKey(file.absolutePath)) {
+                Log.d(TAG, "File already in pending list: ${file.name}")
+                continue
+            }
+            
+            // Add new file to pending uploads
+            Log.d(TAG, "Adding discovered local file to pending uploads: ${file.name}")
+            addPendingUploadByPath(
+                context,
+                file.name,
+                file.absolutePath,
+                PendingUpload.UploadType.BOTH,
+                null,
+                "File found in local storage"
+            )
+            newFilesAdded++
+        }
+        
+        if (newFilesAdded > 0) {
+            Log.d(TAG, "Added $newFilesAdded new files from local storage to pending uploads")
+        }
+        
+        return newFilesAdded
+    }
 }

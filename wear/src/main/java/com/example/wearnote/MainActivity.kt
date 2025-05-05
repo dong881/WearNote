@@ -555,6 +555,11 @@ class MainActivity : ComponentActivity() {
                         
                         // Force an immediate update on composition
                         LaunchedEffect(forceRefresh) {
+                            // Initialize PendingUploadsManager first
+                            PendingUploadsManager.initialize(this@MainActivity)
+                            // Scan local directory for missed files
+                            PendingUploadsManager.scanLocalMusicDirectory(this@MainActivity)
+                            // Update the count after potentially adding new files
                             pendingUploadsCount.value = PendingUploadsManager.getPendingUploadCount()
                         }
                         
@@ -577,6 +582,42 @@ class MainActivity : ComponentActivity() {
                                 )
                             ) {
                                 Text("Pending (${pendingUploadsCount.value})")
+                            }
+                        } else {
+                            // Add a scan button that's visible even when no pending uploads
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { 
+                                    // Scan for local files and refresh UI
+                                    val filesAdded = PendingUploadsManager.scanLocalMusicDirectory(this@MainActivity)
+                                    if (filesAdded > 0) {
+                                        Toast.makeText(
+                                            this@MainActivity, 
+                                            "Found $filesAdded file(s) for upload", 
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        Toast.makeText(
+                                            this@MainActivity, 
+                                            "No new files found", 
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth(0.7f)
+                                    .padding(vertical = 4.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    backgroundColor = Color(0xFF424242) // Darker gray
+                                )
+                            ) {
+                                Icon(
+                                    painter = painterResource(id = R.drawable.ic_search),
+                                    contentDescription = "Scan for local files",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
                             }
                         }
                     }

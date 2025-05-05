@@ -32,13 +32,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.wear.compose.material.*
 import com.example.wearnote.service.RecorderService
 import com.example.wearnote.auth.ConfigHelper
 import com.example.wearnote.auth.KeystoreHelper
 import com.example.wearnote.service.PendingUploadsManager
 import com.example.wearnote.ui.PendingUploadsScreen
+import com.example.wearnote.service.GoogleDriveUploader  // Fixed: Changed from upload to service package
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // Google Sign-In imports
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -72,6 +75,9 @@ class MainActivity : ComponentActivity() {
         const val STATUS_UPLOAD_STARTED = "upload_started"
         const val STATUS_RECORDING_DISCARDED = "recording_discarded"
         const val STATUS_RECORDING_STARTED = "recording_started"  // New status for recording started confirmation
+
+        // Add this constant for Google Drive permission handling
+        private const val REQUEST_AUTHORIZATION = 1001
     }
 
     private enum class RecordingState {
@@ -155,6 +161,14 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    // Add this as a class member
+    private val permissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.d(TAG, "Received permission request broadcast")
+            checkPendingPermissionRequests()
+        }
+    }
+    
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
@@ -184,6 +198,14 @@ class MainActivity : ComponentActivity() {
             Log.d(TAG, "Registered receiver without flags")
         }
         
+        // Register for permission broadcasts
+        val permissionFilter = IntentFilter("com.example.wearnote.NEED_PERMISSION")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(permissionReceiver, permissionFilter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(permissionReceiver, permissionFilter)
+        }
+        
         // Check for ongoing uploads when app starts
         checkPendingUploads()
         
@@ -199,7 +221,10 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.FOREGROUND_SERVICE,
             Manifest.permission.INTERNET
-        ))
+         ))
+        
+        // Check for pending permission requests at startup
+        checkPendingPermissionRequests()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -268,6 +293,12 @@ class MainActivity : ComponentActivity() {
         try {
             unregisterReceiver(recordingStatusReceiver)
         } catch (e: IllegalArgumentException) {
+            // Receiver might not be registered
+        }
+        // Don't forget to unregister the receiver
+        try {
+            unregisterReceiver(permissionReceiver)
+        } catch (e: Exception) {
             // Receiver might not be registered
         }
     }
@@ -586,8 +617,46 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        // Check for pending permission requests when the activity resumes
+        checkPendingPermissionRequests()
     }
-    
+
+    // Add this method to check and handle pending permission requests
+    private fun checkPendingPermissionRequests() {
+        if (GoogleDriveUploader.hasPermissionRequest()) {
+            val permissionIntent = GoogleDriveUploader.getPermissionIntent()
+            permissionIntent?.let {
+                try {
+                    // Start the permission request activity
+                    startActivityForResult(it, GoogleDriveUploader.REQUEST_AUTHORIZATION)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start permission request: ${e.message}")
+                    Toast.makeText(this, "Failed to request Google Drive permissions", Toast.LENGTH_SHORT).show()
+                    GoogleDriveUploader.clearPermissionIntent()
+                }
+            }
+        }
+    }
+
+    // Handle permission result
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        
+        if (requestCode == GoogleDriveUploader.REQUEST_AUTHORIZATION) {
+            if (GoogleDriveUploader.handleAuthResult(resultCode)) {
+                // Permission granted, try to process pending uploads
+                Toast.makeText(this, "Google Drive permissions granted", Toast.LENGTH_SHORT).show()
+                lifecycleScope.launch {
+                    GoogleDriveUploader.processPending(this@MainActivity)
+                }
+            } else {
+                // Permission denied
+                Toast.makeText(this, "Google Drive permissions denied", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // Check if there are any pending uploads when app starts
     private fun checkPendingUploads() {
         Intent(this, RecorderService::class.java).also {

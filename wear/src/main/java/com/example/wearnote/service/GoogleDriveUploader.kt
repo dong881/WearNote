@@ -1,6 +1,8 @@
 package com.example.wearnote.service
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
@@ -8,6 +10,7 @@ import android.util.Log
 import com.example.wearnote.model.PendingUpload
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.client.googleapis.extensions.android.gms.auth.UserRecoverableAuthIOException
 import com.google.api.client.http.FileContent
 import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
@@ -25,12 +28,30 @@ object GoogleDriveUploader {
     private const val FOLDER_NAME = "WearNote_Recordings"
     private var folderId: String? = null
     
+    // For handling auth permission requests
+    private var permissionIntent: Intent? = null
+    const val REQUEST_AUTHORIZATION = 1001
+    
+    // Check if permission request is pending
+    fun hasPermissionRequest(): Boolean = permissionIntent != null
+    
+    // Get the stored permission intent
+    fun getPermissionIntent(): Intent? = permissionIntent
+    
+    // Clear the permission intent after handling
+    fun clearPermissionIntent() {
+        permissionIntent = null
+    }
+    
     // Modified upload function with status update callback
     suspend fun upload(
         context: Context, 
         file: File,
         updateStatus: ((String) -> Unit)? = null
     ): String? = withContext(Dispatchers.IO) {
+        // Clear any previous permission request
+        clearPermissionIntent()
+        
         // Check network connectivity
         updateStatus?.invoke("Checking connection...")
         if (!isNetworkAvailable(context)) {
@@ -86,6 +107,13 @@ object GoogleDriveUploader {
             // Get or create the WearNote_Recordings folder
             val parentFolderId = getOrCreateFolder(driveService)
             if (parentFolderId == null) {
+                if (hasPermissionRequest()) {
+                    // We need permission, notify the caller
+                    Log.i(TAG, "Need user authorization for Drive access")
+                    updateStatus?.invoke("Authorization needed")
+                    return@withContext null
+                }
+                
                 Log.e(TAG, "Failed to create or find WearNote_Recordings folder")
                 updateStatus?.invoke("Upload failed: Could not create folder")
                 PendingUploadsManager.addPendingUpload(
@@ -150,6 +178,14 @@ object GoogleDriveUploader {
             return@withContext fileId
 
         } catch (e: Exception) {
+            if (e is UserRecoverableAuthIOException) {
+                // Store the permission intent for later use
+                permissionIntent = e.intent
+                Log.i(TAG, "Need user authorization for Drive access")
+                updateStatus?.invoke("Authorization needed")
+                return@withContext null
+            }
+            
             Log.e(TAG, "Google Drive upload failed for ${file.name}", e)
             updateStatus?.invoke("Error during upload: ${e.message}")
             PendingUploadsManager.addPendingUpload(
@@ -198,6 +234,13 @@ object GoogleDriveUploader {
             Log.d(TAG, "Created new folder: $FOLDER_NAME, ID: $folderId")
             return@withContext folderId
         } catch (e: Exception) {
+            if (e is UserRecoverableAuthIOException) {
+                // Store the permission intent for later
+                permissionIntent = e.intent
+                Log.i(TAG, "Need user authorization for folder access")
+                return@withContext null
+            }
+            
             Log.e(TAG, "Error creating/finding folder", e)
             return@withContext null
         }
@@ -222,5 +265,14 @@ object GoogleDriveUploader {
     suspend fun processPending(context: Context) = withContext(Dispatchers.IO) {
         // Delegate to the new manager
         PendingUploadsManager.processAllPendingUploads(context)
+    }
+    
+    // Handle auth result after permission activity
+    fun handleAuthResult(resultCode: Int): Boolean {
+        if (resultCode == Activity.RESULT_OK) {
+            clearPermissionIntent()
+            return true
+        }
+        return false
     }
 }

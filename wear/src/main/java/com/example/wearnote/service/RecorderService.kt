@@ -112,7 +112,7 @@ class RecorderService : Service() {
             }
         }
 
-        serviceScope.cancel() // Cancel only service scope, not processing scope
+        serviceScope.cancel() // Cancel all coroutines when the service is destroyed
         Log.d(TAG, "Service onDestroy")
         Log.d(TAG, "Recorder resources released, job cancelled.")
     }
@@ -129,7 +129,12 @@ class RecorderService : Service() {
 
         when (intent?.action) {
             ACTION_START_RECORDING -> startRecording()
-            ACTION_STOP_RECORDING -> stopRecordingAndUpload()
+            ACTION_STOP_RECORDING -> {
+                // Launch a coroutine to call the suspend function
+                serviceScope.launch {
+                    stopRecordingAndUpload()
+                }
+            }
             ACTION_PAUSE_RECORDING -> pauseRecording()
             ACTION_RESUME_RECORDING -> resumeRecording()
             ACTION_DISCARD_RECORDING -> discardRecording()  // Add this handler
@@ -478,7 +483,7 @@ class RecorderService : Service() {
         }
     }
 
-    private fun stopRecordingAndUpload() {
+    private suspend fun stopRecordingAndUpload() {
         if (!isRecording) {
             Log.w(TAG, "Recording not active, cannot stop.")
             stopSelf()
@@ -511,6 +516,12 @@ class RecorderService : Service() {
                         updateNotification(status)
                     }
                     
+                    // Check if we need permission after upload attempt
+                    if (fileId == null && GoogleDriveUploader.hasPermissionRequest()) {
+                        // Send a broadcast to notify MainActivity to handle permission request
+                        sendNeedPermissionBroadcast()
+                    }
+
                     // Process result
                     if (fileId != null) {
                         Log.i(TAG, "Upload successful! Google Drive File ID: $fileId")
@@ -534,6 +545,12 @@ class RecorderService : Service() {
             notifyUploadComplete(null)
             stopSelf()
         }
+    }
+
+    private fun sendNeedPermissionBroadcast() {
+        val intent = Intent("com.example.wearnote.NEED_PERMISSION")
+        sendBroadcast(intent)
+        Log.d(TAG, "Sending broadcast for permission request")
     }
 
     private fun sendToAIProcessing(fileId: String, isRetry: Boolean = false) {

@@ -10,6 +10,7 @@ import android.content.Context.RECEIVER_NOT_EXPORTED
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.CountDownTimer
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -98,6 +99,16 @@ class MainActivity : ComponentActivity() {
     private val isAutoStartInProgress = mutableStateOf(false)
     private val userInteracted = mutableStateOf(false)
     
+    // Add auto-recording countdown variables
+    private val countdownDurationSeconds = 3L  // 3 seconds
+    private var countdownTimer: CountDownTimer? = null
+    private val countdownActive = mutableStateOf(false)
+    private val countdownSeconds = mutableStateOf(countdownDurationSeconds)
+    // Add flag to track if we're coming from a stop or discard action
+    private var skipNextCountdown = false
+    // Add flag to track if user is actively using the app
+    private var isActivelyUsing = false
+    
     // Improved broadcast receiver with more logging
     private val recordingStatusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -171,13 +182,13 @@ class MainActivity : ComponentActivity() {
     
     private val permLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { perms ->
+    ) { perms -> 
         onPermissionsGranted(perms.values.all { it })
     }
     
     private val googleSignInLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { result ->
+    ) { result -> 
         handleSignInResult(result.data)
     }
 
@@ -252,40 +263,42 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun autoStartRecordingAndGoHome() {
-        // Check if already recording
-        if (currentRecordingState != RecordingState.RECORDING && currentRecordingState != RecordingState.PAUSED) {
-            Log.d(TAG, "Auto-starting recording and waiting for confirmation")
-            
-            // Reset interaction flag and confirmation flags
-            userInteracted.value = false
-            isRecordingStartConfirmed.value = false
-            isAutoStartInProgress.value = true
-            
-            // Start recording
-            startRecording()
-            
-            // Set a longer timeout to wait for confirmation or timeout
-            Handler(Looper.getMainLooper()).postDelayed({
-                if (!isRecordingStartConfirmed.value && isAutoStartInProgress.value) {
-                    // Only return to home if user hasn't interacted
-                    if (!userInteracted.value) {
-                        Log.d(TAG, "No user interaction detected, returning to home")
-                        moveTaskToBack(true)
-                    } else {
-                        Log.d(TAG, "User interaction detected, staying in app")
-                    }
-                    isAutoStartInProgress.value = false
-                }
-            }, 3000) // 3-second timeout
-        } else {
-            Log.d(TAG, "Already recording, showing recording UI")
-            // Already recording, just show the recording UI
+        // Check if already recording - add a more thorough check
+        if (currentRecordingState != RecordingState.IDLE) {
+            Log.d(TAG, "Already recording or paused, not starting a new recording session")
+            // Just show the appropriate UI without starting a new recording
             setContent { 
                 WearNoteTheme {
                     RecordingControlUI() 
                 }
             }
+            return
         }
+
+        // Now we're sure we're in IDLE state and can start recording
+        Log.d(TAG, "Auto-starting recording and waiting for confirmation")
+        
+        // Reset interaction flag and confirmation flags
+        userInteracted.value = false
+        isRecordingStartConfirmed.value = false
+        isAutoStartInProgress.value = true
+        
+        // Start recording
+        startRecording()
+        
+        // Set a longer timeout to wait for confirmation or timeout
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isRecordingStartConfirmed.value && isAutoStartInProgress.value) {
+                // Only return to home if user hasn't interacted
+                if (!userInteracted.value) {
+                    Log.d(TAG, "No user interaction detected, returning to home")
+                    moveTaskToBack(true)
+                } else {
+                    Log.d(TAG, "User interaction detected, staying in app")
+                }
+                isAutoStartInProgress.value = false
+            }
+        }, 3000) // 3-second timeout
     }
 
     override fun onDestroy() {
@@ -404,6 +417,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startRecording() {
+        // Cancel any active countdown before starting recording
+        cancelAutoRecordingCountdown()
+        
+        // Add extra check here to prevent multiple recordings
+        if (isRecording.value || currentRecordingState != RecordingState.IDLE) {
+            Log.d(TAG, "Recording already in progress, not starting a new one")
+            return
+        }
+
+        // Only mark as actively using if not in auto-start mode
+        if (!isAutoStartInProgress.value) {
+            // Mark user as actively using the app
+            isActivelyUsing = true
+            userInteracted.value = true
+            Log.d(TAG, "Manual recording started - setting userInteracted=true")
+        } else {
+            Log.d(TAG, "Auto recording started - keeping userInteracted=${userInteracted.value}")
+        }
+
         Log.d(TAG, "Starting recording")
         Intent(this, RecorderService::class.java).also {
             it.action = RecorderService.ACTION_START_RECORDING
@@ -427,12 +459,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopRecording() {
+        // Cancel any active countdown
+        cancelAutoRecordingCountdown()
+        
+        // Mark user as actively using the app
+        isActivelyUsing = true
+        userInteracted.value = true
+        
         Log.d(TAG, "Stopping recording")
         
         // Reset state immediately
         isRecording.value = false  
         isPaused.value = false
         currentRecordingState = RecordingState.IDLE
+        
+        // Set flag to skip countdown next time
+        skipNextCountdown = true
         
         // Show initial UI immediately instead of uploading UI
         showInitialUI(autoStartRecording = false)
@@ -447,10 +489,19 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    // Add a new function to discard recording
     private fun discardRecording() {
+        // Cancel any active countdown
+        cancelAutoRecordingCountdown()
+        
+        // Mark user as actively using the app
+        isActivelyUsing = true
+        userInteracted.value = true
+        
         Log.d(TAG, "Discarding recording")
         isRecording.value = false  // Stop timer immediately
+        
+        // Set flag to skip countdown next time
+        skipNextCountdown = true
         
         // Send discard action to service
         Intent(this, RecorderService::class.java).also { 
@@ -464,6 +515,13 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun togglePauseResumeRecording(isPaused: Boolean) {
+        // Cancel any active countdown
+        cancelAutoRecordingCountdown()
+        
+        // Mark user as actively using the app
+        isActivelyUsing = true
+        userInteracted.value = true
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             Log.d(TAG, if (isPaused) "Resuming recording" else "Pausing recording")
             val action = if (isPaused) 
@@ -480,11 +538,21 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun showInitialUI(autoStartRecording: Boolean = false, forceRefresh: Boolean = false) {
-        // Reset recording state
-        isRecording.value = false
-        isPaused.value = false
-        elapsedTime.value = 0
-        currentRecordingState = RecordingState.IDLE
+        // Reset recording state only if we're truly idle
+        // This is important to avoid disrupting an ongoing recording
+        if (currentRecordingState == RecordingState.IDLE) {
+            isRecording.value = false
+            isPaused.value = false
+            elapsedTime.value = 0
+        } else {
+            Log.d(TAG, "Not in IDLE state, showing recording UI instead of initial UI")
+            setContent { 
+                WearNoteTheme {
+                    RecordingControlUI() 
+                }
+            }
+            return // Don't continue with showing the initial UI
+        }
         
         // Add this to ensure PendingUploadsManager is properly initialized
         if (forceRefresh) {
@@ -508,122 +576,242 @@ class MainActivity : ComponentActivity() {
                     }
                 }, 1000)
             }, 500)
+        } else {
+            // Start the auto-recording countdown when showing IDLE UI
+            // But only if:
+            // 1. We're not coming from a stop or discard action
+            // 2. We're definitely in IDLE state
+            // 3. The user is not actively using the app
+            if (!skipNextCountdown && !isActivelyUsing && 
+                    currentRecordingState == RecordingState.IDLE) {
+                startAutoRecordingCountdown()
+            } else {
+                // Reset the flag after using it
+                skipNextCountdown = false
+                Log.d(TAG, "Skipping countdown: skipNext=$skipNextCountdown, activelyUsing=$isActivelyUsing, state=$currentRecordingState")
+            }
         }
         
         // Show initial UI
         setContent { 
             WearNoteTheme {
-                ScalingLazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    item {
-                        Text(
-                            text = getString(R.string.app_name),
-                            style = MaterialTheme.typography.title1,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    
-                    item {
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(
-                            onClick = { startRecording() },
-                            modifier = Modifier
-                                .fillMaxWidth(0.7f)
-                                .padding(vertical = 4.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                backgroundColor = MaterialTheme.colors.primary
+                // Show countdown or regular UI based on countdown state
+                if (countdownActive.value) {
+                    CountdownUI()
+                } else {
+                    ScalingLazyColumn(
+                        modifier = Modifier.fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTapGestures {
+                                    // Cancel countdown on any tap and mark as actively using
+                                    cancelAutoRecordingCountdown()
+                                    userInteracted.value = true
+                                    isActivelyUsing = true
+                                }
+                            },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        item {
+                            Text(
+                                text = getString(R.string.app_name),
+                                style = MaterialTheme.typography.title1,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
                             )
-                        ) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_mic),
-                                contentDescription = "Start Recording",
-                                modifier = Modifier.size(24.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                    }
-                    
-                    // Add Pending Uploads button 
-                    item {
-                        val pendingUploadsCount = remember {
-                            mutableStateOf(0)
                         }
                         
-                        // Force an immediate update on composition
-                        LaunchedEffect(forceRefresh) {
-                            // Initialize PendingUploadsManager first
-                            PendingUploadsManager.initialize(this@MainActivity)
-                            // Scan local directory for missed files
-                            PendingUploadsManager.scanLocalMusicDirectory(this@MainActivity)
-                            // Update the count after potentially adding new files
-                            pendingUploadsCount.value = PendingUploadsManager.getPendingUploadCount()
-                        }
-                        
-                        // Observe changes in pending uploads
-                        LaunchedEffect(Unit) {
-                            PendingUploadsManager.pendingUploadsFlow.collect {
-                                pendingUploadsCount.value = it.size
-                            }
-                        }
-                        
-                        if (pendingUploadsCount.value > 0) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Button(
-                                onClick = { showPendingUploadsScreen() },
-                                modifier = Modifier
-                                    .fillMaxWidth(0.7f)
-                                    .padding(vertical = 4.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    backgroundColor = Color.DarkGray
-                                )
-                            ) {
-                                Text("Pending (${pendingUploadsCount.value})")
-                            }
-                        } else {
-                            // Add a scan button that's visible even when no pending uploads
-                            Spacer(modifier = Modifier.height(8.dp))
+                        item {
+                            Spacer(modifier = Modifier.height(16.dp))
                             Button(
                                 onClick = { 
-                                    // Scan for local files and refresh UI
-                                    val filesAdded = PendingUploadsManager.scanLocalMusicDirectory(this@MainActivity)
-                                    if (filesAdded > 0) {
-                                        Toast.makeText(
-                                            this@MainActivity, 
-                                            "Found $filesAdded file(s) for upload", 
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    } else {
-                                        Toast.makeText(
-                                            this@MainActivity, 
-                                            "No new files found", 
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
+                                    // Cancel countdown and mark as actively using
+                                    cancelAutoRecordingCountdown()
+                                    isActivelyUsing = true
+                                    userInteracted.value = true
+                                    startRecording() 
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth(0.7f)
                                     .padding(vertical = 4.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    backgroundColor = Color(0xFF424242) // Darker gray
+                                    backgroundColor = MaterialTheme.colors.primary
                                 )
                             ) {
                                 Icon(
-                                    painter = painterResource(id = R.drawable.ic_search),
-                                    contentDescription = "Scan for local files",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(32.dp)
+                                    painter = painterResource(id = R.drawable.ic_mic),
+                                    contentDescription = "Start Recording",
+                                    modifier = Modifier.size(24.dp)
                                 )
-                                Spacer(modifier = Modifier.width(4.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                        }
+                        
+                        // Add Pending Uploads button 
+                        item {
+                            val pendingUploadsCount = remember {
+                                mutableStateOf(0)
+                            }
+                            
+                            // Force an immediate update on composition
+                            LaunchedEffect(forceRefresh) {
+                                // Initialize PendingUploadsManager first
+                                PendingUploadsManager.initialize(this@MainActivity)
+                                // Scan local directory for missed files
+                                PendingUploadsManager.scanLocalMusicDirectory(this@MainActivity)
+                                // Update the count after potentially adding new files
+                                pendingUploadsCount.value = PendingUploadsManager.getPendingUploadCount()
+                            }
+                            
+                            // Observe changes in pending uploads
+                            LaunchedEffect(Unit) {
+                                PendingUploadsManager.pendingUploadsFlow.collect {
+                                    pendingUploadsCount.value = it.size
+                                }
+                            }
+                            
+                            if (pendingUploadsCount.value > 0) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = { showPendingUploadsScreen() },
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.7f)
+                                        .padding(vertical = 4.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        backgroundColor = Color.DarkGray
+                                    )
+                                ) {
+                                    Text("Pending (${pendingUploadsCount.value})")
+                                }
+                            } else {
+                                // Add a scan button that's visible even when no pending uploads
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Button(
+                                    onClick = { 
+                                        // Scan for local files and refresh UI
+                                        val filesAdded = PendingUploadsManager.scanLocalMusicDirectory(this@MainActivity)
+                                        if (filesAdded > 0) {
+                                            Toast.makeText(
+                                                this@MainActivity, 
+                                                "Found $filesAdded file(s) for upload", 
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            Toast.makeText(
+                                                this@MainActivity, 
+                                                "No new files found", 
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.7f)
+                                        .padding(vertical = 4.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        backgroundColor = Color(0xFF424242) // Darker gray
+                                    )
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_search),
+                                        contentDescription = "Scan for local files",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                }
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    @Composable
+    private fun CountdownUI() {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        // Cancel the countdown on tap and mark as actively using
+                        cancelAutoRecordingCountdown()
+                        userInteracted.value = true
+                        isActivelyUsing = true
+                    }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                // Countdown timer
+                Text(
+                    text = stringResource(
+                        R.string.auto_recording_countdown,
+                        countdownSeconds.value
+                    ),
+                    color = Color.White,
+                    fontSize = 20.sp,
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                // Tap to cancel instructions
+                Text(
+                    text = stringResource(R.string.auto_recording_cancel),
+                    color = Color.LightGray,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+    
+    private fun startAutoRecordingCountdown() {
+        // Double-check we're truly in IDLE state before starting countdown
+        // Don't start countdown if already recording, countdown is already active, or not in IDLE state
+        if (isRecording.value || countdownActive.value || currentRecordingState != RecordingState.IDLE || isActivelyUsing) {
+            Log.d(TAG, "Cannot start countdown: recording=${isRecording.value}, " +
+                    "countdown active=${countdownActive.value}, state=$currentRecordingState, activelyUsing=$isActivelyUsing")
+            return
+        }
+        
+        // Reset countdown seconds
+        countdownSeconds.value = countdownDurationSeconds
+        countdownActive.value = true
+        
+        countdownTimer = object : CountDownTimer(countdownDurationSeconds * 1000, 1000) {
+            override fun onTick(millisUntilFinished: Long) {
+                countdownSeconds.value = millisUntilFinished / 1000
+                // Update UI
+                Log.d(TAG, "Countdown: ${countdownSeconds.value} seconds remaining")
+            }
+            
+            override fun onFinish() {
+                countdownActive.value = false
+                // Start recording and go to home screen
+                Log.d(TAG, "Countdown finished, starting recording")
+                Toast.makeText(this@MainActivity, R.string.auto_recording_starting, Toast.LENGTH_SHORT).show()
+                
+                // Start recording
+                startRecording()
+                
+                // Small delay before returning to home screen
+                Handler(Looper.getMainLooper()).postDelayed({
+                    moveTaskToBack(true)
+                }, 1000)
+            }
+        }.start()
+    }
+    
+    private fun cancelAutoRecordingCountdown() {
+        countdownTimer?.cancel()
+        countdownTimer = null
+        countdownActive.value = false
+        Log.d(TAG, "Auto-recording countdown cancelled")
     }
 
     // Fix the function that shows the pending uploads screen
@@ -643,9 +831,17 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         
+        // Reset the actively using flag on resume to ensure countdown works next time
+        isActivelyUsing = false
+        
+        // Cancel any countdown when resuming to avoid potential conflicts
+        cancelAutoRecordingCountdown()
+        
         if (currentRecordingState == RecordingState.IDLE) {
             Log.d(TAG, "App resumed while idle, checking if we should show initial UI")
             // Don't auto-start recording on resume, just show appropriate UI
+            // Clear skip flag when resuming to ensure countdown works on future app starts
+            skipNextCountdown = false
             showInitialUI(autoStartRecording = false)
         } else {
             Log.d(TAG, "App resumed while recording/paused, showing appropriate UI")
@@ -708,6 +904,10 @@ class MainActivity : ComponentActivity() {
     
     override fun onPause() {
         super.onPause()
+        // Cancel countdown if app is paused
+        cancelAutoRecordingCountdown()
+        // Reset the actively using flag on pause
+        isActivelyUsing = false
         // Don't stop the service or recording when app is paused
         Log.d(TAG, "MainActivity paused, allowing background recording to continue")
     }
@@ -725,6 +925,12 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun RecordingControlUI() {
+        // Cancel any active countdown when showing recording UI
+        LaunchedEffect(Unit) {
+            cancelAutoRecordingCountdown()
+            isActivelyUsing = true
+        }
+
         val isPausedState = remember { isPaused }
         val elapsedTimeState = remember { elapsedTime }
         val isRecordingState = remember { isRecording }

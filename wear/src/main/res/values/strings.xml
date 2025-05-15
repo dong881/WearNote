@@ -28,6 +28,10 @@
     <string name="permission_rationale">Microphone permission is required to record audio.</string>
     <string name="permission_denied">Permission denied. Cannot record audio.</string>
     <string name="first_launch_recording">Starting initial recording...</string>
+    <!-- New strings for auto-countdown -->
+    <string name="auto_recording_countdown">Auto-record in %1$d</string>
+    <string name="auto_recording_starting">Starting recording...</string>
+    <string name="auto_recording_cancel">Tap to cancel</string>
     <!-- Single client ID for all Google Sign-In operations -->
     <string name="android_client_id">961715726121-lqm36ao22hs3vm7b1vseidh68suft09e.apps.googleusercontent.com</string>
 </resources>

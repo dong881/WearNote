@@ -504,34 +504,82 @@ class RecorderService : Service() {
 
                 pendingUploads[outputFile.name] = false
 
-                serviceScope.launch {
-                    val file = outputFile // Create a local reference to avoid closure issues
+                // Start NetworkMonitorService to analyze connection
+                NetworkMonitorService.startMonitoring(this)
+                
+                // Check if we're on a slow Bluetooth connection
+                val isSlowBluetooth = NetworkMonitorService.isSlowBluetoothConnection(this)
+                val isFastConnection = NetworkMonitorService.isFastConnection(this)
+                val fileSize = outputFile.length()
+                
+                // For large files on slow Bluetooth, recommend WiFi for upload
+                if (fileSize > 5 * 1024 * 1024 && isSlowBluetooth && !isFastConnection) {
+                    Log.d(TAG, "Large file on slow Bluetooth connection detected, adding to pending uploads")
+                    // Always add to pending uploads for big files on slow connections
+                    PendingUploadsManager.addPendingUpload(
+                        this, 
+                        outputFile, 
+                        PendingUpload.UploadType.BOTH, 
+                        null, 
+                        "Large file queued for better connection"
+                    )
                     
-                    // Use GoogleDriveUploader directly with notification updates
-                    val fileId = GoogleDriveUploader.upload(
-                        this@RecorderService, 
-                        file
-                    ) { status ->
-                        // Update notification with current status
-                        updateNotification(status)
-                    }
+                    // Show notification to user about pending upload
+                    val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                        .setContentTitle("Upload Pending")
+                        .setContentText("Large file queued for upload on better connection")
+                        .setSmallIcon(R.drawable.ic_mic)
+                        .build()
                     
-                    // Check if we need permission after upload attempt
-                    if (fileId == null && GoogleDriveUploader.hasPermissionRequest()) {
-                        // Send a broadcast to notify MainActivity to handle permission request
-                        sendNeedPermissionBroadcast()
-                    }
-
-                    // Process result
-                    if (fileId != null) {
-                        Log.i(TAG, "Upload successful! Google Drive File ID: $fileId")
+                    val notificationManager = NotificationManagerCompat.from(this)
+                    notificationManager.notify(NOTIFICATION_ID + 10, notification)
+                    
+                    // Still attempt upload but don't wait for result
+                    serviceScope.launch {
+                        val fileId = GoogleDriveUploader.upload(
+                            this@RecorderService, 
+                            outputFile
+                        ) { status ->
+                            updateNotification(status)
+                        }
                         
-                        // Send HTTP POST to the AI processing endpoint
-                        sendToAIProcessing(fileId, false)
-                        notifyUploadComplete(fileId)
-                    } else {
-                        // Error handling already done in GoogleDriveUploader.upload
-                        notifyUploadComplete(null)
+                        // Process result in background if successful
+                        if (fileId != null) {
+                            Log.i(TAG, "Upload successful despite slow connection! File ID: $fileId")
+                            PendingUploadsManager.removePendingUpload(this@RecorderService, outputFile.absolutePath)
+                        }
+                    }
+                } else {
+                    // Normal upload for smaller files or good connections
+                    serviceScope.launch {
+                        val file = outputFile // Create a local reference to avoid closure issues
+                        
+                        // Use GoogleDriveUploader directly with notification updates
+                        val fileId = GoogleDriveUploader.upload(
+                            this@RecorderService, 
+                            file
+                        ) { status ->
+                            // Update notification with current status
+                            updateNotification(status)
+                        }
+                        
+                        // Check if we need permission after upload attempt
+                        if (fileId == null && GoogleDriveUploader.hasPermissionRequest()) {
+                            // Send a broadcast to notify MainActivity to handle permission request
+                            sendNeedPermissionBroadcast()
+                        }
+
+                        // Process result
+                        if (fileId != null) {
+                            Log.i(TAG, "Upload successful! File ID: $fileId")
+                            
+                            // Send HTTP POST to the AI processing endpoint
+                            sendToAIProcessing(fileId, false)
+                            notifyUploadComplete(fileId)
+                        } else {
+                            // Error handling already done in GoogleDriveUploader.upload
+                            notifyUploadComplete(null)
+                        }
                     }
                 }
 

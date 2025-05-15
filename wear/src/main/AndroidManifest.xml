@@ -64,6 +64,9 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <service android:name=".service.NetworkMonitorService" 
+                 android:exported="false" />
+
         <receiver android:name=".receiver.NetworkChangeReceiver"
                   android:exported="true">
             <intent-filter>

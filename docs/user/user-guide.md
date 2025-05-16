@@ -199,22 +199,3 @@ WearNote takes your privacy seriously:
 You can delete your data at any time by:
 1. Removing files from Google Drive
 2. Clearing app data on your watch
-
-## Getting Support
-
-If you encounter issues not covered in this guide:
-
-- Check our [FAQ section](https://wearnote-app.com/faq)
-- Contact support at support@wearnote-app.com
-- Visit the [GitHub repository](https://github.com/yourusername/WearNote) for technical issues
-
-## Updates and New Features
-
-WearNote is continuously improved. Keep your app updated to access:
-
-- Performance improvements
-- New features
-- Bug fixes
-- Enhanced AI capabilities
-
-Enable automatic updates in Google Play Store to always have the latest version.

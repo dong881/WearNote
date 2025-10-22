@@ -72,6 +72,14 @@ class RecorderService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    
+    // NEW FEATURE: Low volume monitoring
+    private var volumeCheckJob: Job? = null
+    private var recordingStartTime: Long = 0
+    private var lowVolumeNotificationShown = false
+    private val VOLUME_CHECK_INTERVAL = 60000L // Check every minute
+    private val LOW_VOLUME_THRESHOLD = 15 * 60 * 1000L // 15 minutes
+    private val LOW_VOLUME_AMPLITUDE_THRESHOLD = 500 // Threshold for considering volume "low"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(120, TimeUnit.SECONDS)  // 2 minutes for connection
@@ -203,6 +211,10 @@ class RecorderService : Service() {
         }
 
         Log.d(TAG, "Discarding recording...")
+        
+        // NEW FEATURE: Stop volume monitoring
+        stopVolumeMonitoring()
+        
         try {
             if (mediaRecorder != null) {
                 try {
@@ -324,6 +336,11 @@ class RecorderService : Service() {
                     isPaused = false
                     Log.d(TAG, "Recording started successfully")
                     
+                    // NEW FEATURE: Start volume monitoring
+                    recordingStartTime = System.currentTimeMillis()
+                    lowVolumeNotificationShown = false
+                    startVolumeMonitoring()
+                    
                     // Send confirmation broadcast that recording has actually started
                     Handler(Looper.getMainLooper()).post {
                         val intent = Intent(MainActivity.ACTION_RECORDING_STATUS).apply {
@@ -340,9 +357,11 @@ class RecorderService : Service() {
             }
         } catch (e: IOException) {
             Log.e(TAG, "MediaRecorder prepare() failed", e)
+            releaseWakeLock()  // BUGFIX: Release wake lock on error
             stopSelf()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start recording", e)
+            releaseWakeLock()  // BUGFIX: Release wake lock on error
             stopSelf()
         }
     }
@@ -360,6 +379,9 @@ class RecorderService : Service() {
                 // Capture current state before pausing for debugging
                 Log.d(DEBUG_TAG, "About to pause and release MediaRecorder")
 
+                // NEW FEATURE: Stop volume monitoring when paused
+                stopVolumeMonitoring()
+
                 // Actually stop and release the MediaRecorder to free microphone
                 try {
                     mediaRecorder?.stop()
@@ -373,11 +395,16 @@ class RecorderService : Service() {
                     Log.d(DEBUG_TAG, "MediaRecorder release() successful")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error releasing mediaRecorder during pause", e)
+                } finally {
+                    // BUGFIX: Always set mediaRecorder to null even if release fails
+                    mediaRecorder = null
                 }
 
-                mediaRecorder = null
                 isPaused = true
                 // Note: isRecording remains true to indicate we're in a paused state
+
+                // BUGFIX: Release wake lock when paused to save battery
+                releaseWakeLock()
 
                 // Log confirmation message
                 Log.d(DEBUG_TAG, "Recording definitely paused and microphone released")
@@ -393,6 +420,14 @@ class RecorderService : Service() {
                 verifyPausedState()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to pause recording", e)
+                // BUGFIX: Ensure resources are cleaned up even on error
+                try {
+                    mediaRecorder?.release()
+                } catch (ex: Exception) {
+                    Log.e(TAG, "Error releasing recorder on pause failure", ex)
+                } finally {
+                    mediaRecorder = null
+                }
                 // Try to recover by continuing recording
                 isPaused = false
                 updateNotification("Recording... (pause failed)")
@@ -432,6 +467,12 @@ class RecorderService : Service() {
                 // Log action before attempting
                 Log.d(TAG, "About to resume recording by creating new MediaRecorder")
 
+                // BUGFIX: Re-acquire wake lock before resuming
+                if (wakeLock?.isHeld == false) {
+                    wakeLock?.acquire(0) // Acquire indefinitely
+                    Log.d(TAG, "Wake lock re-acquired for resume")
+                }
+
                 // Create a new MediaRecorder instance that will append to the existing file
                 mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     MediaRecorder(this)
@@ -458,6 +499,9 @@ class RecorderService : Service() {
                         start()
                         isPaused = false
                         Log.d(TAG, "MediaRecorder successfully recreated and started")
+                        
+                        // NEW FEATURE: Restart volume monitoring when resumed
+                        startVolumeMonitoring()
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to start mediaRecorder during resume", e)
                         throw e
@@ -473,6 +517,15 @@ class RecorderService : Service() {
                 sendBroadcast(intent)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to resume recording", e)
+                // BUGFIX: Clean up resources on error
+                try {
+                    mediaRecorder?.release()
+                } catch (ex: Exception) {
+                    Log.e(TAG, "Error releasing recorder on resume failure", ex)
+                } finally {
+                    mediaRecorder = null
+                }
+                releaseWakeLock()
                 // Try to recover
                 isPaused = true
                 updateNotification("Paused (resume failed)")
@@ -491,6 +544,10 @@ class RecorderService : Service() {
         }
 
         Log.d(TAG, "Stopping recording...")
+        
+        // NEW FEATURE: Stop volume monitoring
+        stopVolumeMonitoring()
+        
         try {
             mediaRecorder?.stop()   
             mediaRecorder?.release()
@@ -900,5 +957,84 @@ class RecorderService : Service() {
                 Log.e(TAG, "Error releasing wake lock", e)
             }
         }
+    }
+    
+    // NEW FEATURE: Volume monitoring for low volume detection
+    private fun startVolumeMonitoring() {
+        // Cancel any existing monitoring job
+        volumeCheckJob?.cancel()
+        
+        volumeCheckJob = serviceScope.launch {
+            while (isActive && isRecording && !isPaused) {
+                delay(VOLUME_CHECK_INTERVAL)
+                
+                // Check if we've been recording for more than 15 minutes
+                val recordingDuration = System.currentTimeMillis() - recordingStartTime
+                if (recordingDuration > LOW_VOLUME_THRESHOLD && !lowVolumeNotificationShown) {
+                    // Check if volume is low
+                    val maxAmplitude = try {
+                        mediaRecorder?.maxAmplitude ?: 0
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error getting max amplitude", e)
+                        0
+                    }
+                    
+                    Log.d(TAG, "Volume check: amplitude=$maxAmplitude, duration=${recordingDuration / 1000}s")
+                    
+                    if (maxAmplitude < LOW_VOLUME_AMPLITUDE_THRESHOLD) {
+                        // Volume is low, show notification
+                        showLowVolumeNotification()
+                        lowVolumeNotificationShown = true
+                    }
+                }
+            }
+        }
+    }
+    
+    private fun stopVolumeMonitoring() {
+        volumeCheckJob?.cancel()
+        volumeCheckJob = null
+    }
+    
+    private fun showLowVolumeNotification() {
+        val notificationId = 9999
+        
+        // Create intent to open MainActivity when notification is clicked
+        val openAppIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val openAppPendingIntent = PendingIntent.getActivity(
+            this, 
+            0, 
+            openAppIntent, 
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Low Volume Detected")
+            .setContentText("Recording volume has been low for 15+ minutes. Did you forget to stop recording?")
+            .setSmallIcon(R.drawable.ic_mic)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVibrate(longArrayOf(0, 500, 250, 500))
+            .setContentIntent(openAppPendingIntent)
+            .setAutoCancel(true)
+            .addAction(
+                R.drawable.ic_stop,
+                "Stop Recording",
+                PendingIntent.getService(
+                    this,
+                    1,
+                    Intent(this, RecorderService::class.java).apply {
+                        action = ACTION_STOP_RECORDING
+                    },
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
+            )
+            .build()
+        
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(notificationId, notification)
+        
+        Log.d(TAG, "Low volume notification shown")
     }
 }

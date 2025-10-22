@@ -28,6 +28,7 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
 import kotlinx.coroutines.delay
+import android.widget.Toast
 
 object GoogleDriveUploader {
     private const val TAG = "GoogleDriveUploader"
@@ -59,9 +60,27 @@ object GoogleDriveUploader {
         clearPermissionIntent()
         
         updateStatus?.invoke("Checking connection...")
+        
+        // NEW FEATURE: Check WiFi status and provide helpful message
+        val networkQuality = WiFiConnectionHelper.getNetworkQuality(context)
+        val wifiStatus = WiFiConnectionHelper.getWiFiStatusMessage(context)
+        Log.d(TAG, "Network quality: $networkQuality, Status: $wifiStatus")
+        
         if (!isNetworkAvailable(context)) {
             Log.w(TAG, "No internet connection available. Cannot upload file.")
             updateStatus?.invoke("Upload failed: No internet connection")
+            
+            // Suggest WiFi if not connected
+            if (!WiFiConnectionHelper.isConnectedToWiFi(context)) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context, 
+                        "Tip: Enable Wi-Fi Auto mode in Settings for faster uploads", 
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            
             PendingUploadsManager.addPendingUpload(
                 context, 
                 file, 
@@ -71,6 +90,17 @@ object GoogleDriveUploader {
             )
             return@withContext null
         }
+        
+        // Show network quality in status
+        val qualityText = when (networkQuality) {
+            WiFiConnectionHelper.NetworkQuality.EXCELLENT_WIFI -> "Excellent WiFi"
+            WiFiConnectionHelper.NetworkQuality.GOOD_WIFI -> "Good WiFi"
+            WiFiConnectionHelper.NetworkQuality.FAIR_WIFI -> "Fair WiFi"
+            WiFiConnectionHelper.NetworkQuality.CELLULAR -> "Cellular"
+            WiFiConnectionHelper.NetworkQuality.BLUETOOTH -> "Bluetooth"
+            else -> "Network"
+        }
+        updateStatus?.invoke("Connected via $qualityText")
 
         Log.d(TAG, "Starting file upload: ${file.name}, size: ${file.length()} bytes")
         updateStatus?.invoke("Preparing upload...")

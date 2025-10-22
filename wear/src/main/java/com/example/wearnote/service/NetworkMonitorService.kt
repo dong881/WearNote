@@ -18,7 +18,6 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 import android.widget.Toast
-import kotlinx.coroutines.Dispatchers
 
 /**
  * Service that monitors network conditions and optimizes upload strategies.

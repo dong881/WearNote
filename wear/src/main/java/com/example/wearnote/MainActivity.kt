@@ -15,6 +15,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import android.os.BatteryManager
+import android.content.IntentFilter as AndroidIntentFilter
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -196,25 +198,32 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         
         Log.d(TAG, "Registering broadcast receiver")
-        // Register broadcast receiver with proper flags
-        val filter = IntentFilter(ACTION_RECORDING_STATUS)
-        
-        // Fix security exception for Android 13 (API 33) and higher
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(recordingStatusReceiver, filter, RECEIVER_NOT_EXPORTED)
-            Log.d(TAG, "Registered receiver with RECEIVER_NOT_EXPORTED flag")
-        } else {
-            // For older Android versions
-            registerReceiver(recordingStatusReceiver, filter)
-            Log.d(TAG, "Registered receiver without flags")
+        // BUGFIX: Only register if not already registered
+        if (!isRecordingStatusReceiverRegistered) {
+            // Register broadcast receiver with proper flags
+            val filter = IntentFilter(ACTION_RECORDING_STATUS)
+            
+            // Fix security exception for Android 13 (API 33) and higher
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(recordingStatusReceiver, filter, RECEIVER_NOT_EXPORTED)
+                Log.d(TAG, "Registered receiver with RECEIVER_NOT_EXPORTED flag")
+            } else {
+                // For older Android versions
+                registerReceiver(recordingStatusReceiver, filter)
+                Log.d(TAG, "Registered receiver without flags")
+            }
+            isRecordingStatusReceiverRegistered = true
         }
         
         // Register for permission broadcasts
-        val permissionFilter = IntentFilter("com.example.wearnote.NEED_PERMISSION")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(permissionReceiver, permissionFilter, RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(permissionReceiver, permissionFilter)
+        if (!isPermissionReceiverRegistered) {
+            val permissionFilter = IntentFilter("com.example.wearnote.NEED_PERMISSION")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(permissionReceiver, permissionFilter, RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(permissionReceiver, permissionFilter)
+            }
+            isPermissionReceiverRegistered = true
         }
         
         // Check for ongoing uploads when app starts
@@ -301,19 +310,35 @@ class MainActivity : ComponentActivity() {
         }, 3000) // 3-second timeout
     }
 
+    // BUGFIX: Track if receivers are registered to prevent leaks
+    private var isRecordingStatusReceiverRegistered = false
+    private var isPermissionReceiverRegistered = false
+
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            unregisterReceiver(recordingStatusReceiver)
-        } catch (e: IllegalArgumentException) {
-            // Receiver might not be registered
+        // BUGFIX: Only unregister if actually registered
+        if (isRecordingStatusReceiverRegistered) {
+            try {
+                unregisterReceiver(recordingStatusReceiver)
+                isRecordingStatusReceiverRegistered = false
+                Log.d(TAG, "Recording status receiver unregistered")
+            } catch (e: IllegalArgumentException) {
+                Log.e(TAG, "Error unregistering recording status receiver", e)
+            }
         }
-        // Don't forget to unregister the receiver
-        try {
-            unregisterReceiver(permissionReceiver)
-        } catch (e: Exception) {
-            // Receiver might not be registered
+        
+        if (isPermissionReceiverRegistered) {
+            try {
+                unregisterReceiver(permissionReceiver)
+                isPermissionReceiverRegistered = false
+                Log.d(TAG, "Permission receiver unregistered")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error unregistering permission receiver", e)
+            }
         }
+        
+        // Cancel any pending countdown timers
+        cancelAutoRecordingCountdown()
     }
     
     private fun checkGoogleSignIn() {
@@ -923,6 +948,12 @@ class MainActivity : ComponentActivity() {
         MaterialTheme(content = content)
     }
 
+    // UX IMPROVEMENT: Get battery level
+    private fun getBatteryLevel(): Int {
+        val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        return batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+    }
+
     @Composable
     private fun RecordingControlUI() {
         // Cancel any active countdown when showing recording UI
@@ -934,6 +965,17 @@ class MainActivity : ComponentActivity() {
         val isPausedState = remember { isPaused }
         val elapsedTimeState = remember { elapsedTime }
         val isRecordingState = remember { isRecording }
+        
+        // UX IMPROVEMENT: Battery level state
+        var batteryLevel by remember { mutableStateOf(getBatteryLevel()) }
+        
+        // Update battery level every minute
+        LaunchedEffect(Unit) {
+            while(true) {
+                delay(60000) // Update every minute
+                batteryLevel = getBatteryLevel()
+            }
+        }
         
         // Timer effect
         LaunchedEffect(key1 = isPausedState.value, key2 = isRecordingState.value) {
@@ -956,6 +998,39 @@ class MainActivity : ComponentActivity() {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // UX IMPROVEMENT: Show battery level with color coding
+                val batteryColor = when {
+                    batteryLevel > 50 -> Color.Green
+                    batteryLevel > 20 -> Color.Yellow
+                    else -> Color.Red
+                }
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        painter = painterResource(
+                            id = when {
+                                batteryLevel > 80 -> R.drawable.ic_battery_full
+                                batteryLevel > 50 -> R.drawable.ic_battery_full
+                                batteryLevel > 20 -> R.drawable.ic_battery_low
+                                else -> R.drawable.ic_battery_alert
+                            }
+                        ),
+                        contentDescription = "Battery",
+                        tint = batteryColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "$batteryLevel%",
+                        color = batteryColor,
+                        fontSize = 12.sp
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(4.dp))
+                
                 Text(
                     text = formatTime(elapsedTimeState.value),
                     color = Color.White,

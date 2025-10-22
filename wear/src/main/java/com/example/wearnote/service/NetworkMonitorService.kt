@@ -17,6 +17,8 @@ import kotlinx.coroutines.launch
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
 
 /**
  * Service that monitors network conditions and optimizes upload strategies.
@@ -128,9 +130,20 @@ class NetworkMonitorService : Service() {
     }
     
     private fun analyzeNetworkCapabilities(capabilities: NetworkCapabilities) {
+        val wasWifi = isWifiConnected.get()
+        
         isWifiConnected.set(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
         isCellularConnected.set(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))
         isBluetoothTethered.set(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_BLUETOOTH))
+        
+        // NEW FEATURE: Notify when WiFi becomes available
+        if (!wasWifi && isWifiConnected.get()) {
+            Log.d(TAG, "WiFi connection established!")
+            // This could trigger pending uploads
+            serviceScope.launch(Dispatchers.IO) {
+                PendingUploadsManager.processAllPendingUploads(this@NetworkMonitorService)
+            }
+        }
         
         // Check bandwidth
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -180,17 +193,23 @@ class NetworkMonitorService : Service() {
         Log.d(TAG, "No network available")
     }
     
+    // BUGFIX: Synchronize to prevent race conditions
+    @Synchronized
     private fun updateUploadStrategy() {
         // If we detect we're using Bluetooth tethering with slow speed, set a flag that
         // can be checked by the uploader to use more conservative settings
         val isSlowBluetooth = isBluetoothTethered.get() && !isFastConnection.get()
         
         // Save the status for GoogleDriveUploader to use
-        getSharedPreferences("network_prefs", Context.MODE_PRIVATE).edit().apply {
-            putBoolean("is_slow_bluetooth", isSlowBluetooth)
-            putBoolean("is_wifi", isWifiConnected.get())
-            putBoolean("is_fast_connection", isFastConnection.get())
-            apply()
+        // BUGFIX: Use synchronized block to prevent concurrent modification
+        synchronized(this) {
+            getSharedPreferences("network_prefs", Context.MODE_PRIVATE).edit().apply {
+                putBoolean("is_slow_bluetooth", isSlowBluetooth)
+                putBoolean("is_wifi", isWifiConnected.get())
+                putBoolean("is_fast_connection", isFastConnection.get())
+                putLong("last_update_time", System.currentTimeMillis())
+                apply()
+            }
         }
         
         if (isSlowBluetooth) {

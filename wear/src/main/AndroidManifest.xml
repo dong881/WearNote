@@ -54,11 +54,6 @@
         </activity>
 
         <service
-            android:name=".service.AudioRecorderService"
-            android:foregroundServiceType="mediaProjection"
-            android:exported="false" />
-
-        <service
             android:name=".service.RecorderService"
             android:enabled="true"
             android:exported="false"
@@ -67,7 +62,7 @@
         <service android:name=".service.NetworkMonitorService" 
                  android:exported="false" />
 
-        <receiver android:name=".receiver.NetworkChangeReceiver"
+        <receiver android:name=".service.NetworkChangeReceiver"
                   android:exported="true">
             <intent-filter>
                 <action android:name="android.net.conn.CONNECTIVITY_CHANGE"/>

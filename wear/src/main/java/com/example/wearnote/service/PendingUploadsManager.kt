@@ -57,6 +57,7 @@ object PendingUploadsManager {
     /**
      * Add a file to the pending uploads list
      * Now checks for internet connectivity before adding to pending list
+     * BUGFIX: Check for duplicates before adding
      */
     fun addPendingUpload(
         context: Context, 
@@ -68,6 +69,28 @@ object PendingUploadsManager {
         if (file == null) {
             Log.w(TAG, "Attempted to add pending upload with null file, ignoring")
             return
+        }
+        
+        // BUGFIX: Check if this file is already in pending uploads
+        if (pendingUploads.containsKey(file.absolutePath)) {
+            Log.d(TAG, "File already in pending uploads, updating instead: ${file.name}")
+            // Update existing entry if failure reason changed
+            val existing = pendingUploads[file.absolutePath]
+            if (existing != null && failureReason != null && failureReason != existing.failureReason) {
+                pendingUploads[file.absolutePath] = existing.copy(failureReason = failureReason)
+                saveToPrefs(context)
+                updateFlow()
+            }
+            return
+        }
+        
+        // BUGFIX: Check for duplicate fileId if provided
+        if (fileId != null) {
+            val existingWithSameFileId = pendingUploads.values.find { it.fileId == fileId }
+            if (existingWithSameFileId != null) {
+                Log.d(TAG, "File with same fileId already exists: $fileId, skipping")
+                return
+            }
         }
         
         // Only add to pending uploads if there's no internet or we've already tried once
@@ -82,18 +105,13 @@ object PendingUploadsManager {
             )
         } else {
             Log.d(TAG, "Network available, not adding to pending list: ${file.name}")
-            // Attempt immediate upload if we have internet
-            if (uploadType == PendingUpload.UploadType.BOTH) {
-                // Launch a coroutine to handle the upload
-                GlobalScope.launch(Dispatchers.IO) {
-                    retryDriveUpload(context, file)
-                }
-            }
+            // Note: Removed GlobalScope usage - let caller handle upload scheduling
         }
     }
     
     /**
      * Add a pending upload by path without requiring a File object
+     * BUGFIX: Check for duplicates before adding
      */
     fun addPendingUploadByPath(
         context: Context,
@@ -103,6 +121,27 @@ object PendingUploadsManager {
         fileId: String? = null,
         failureReason: String? = null
     ) {
+        // BUGFIX: Check if already exists
+        if (pendingUploads.containsKey(filePath)) {
+            Log.d(TAG, "Upload by path already exists, updating: $fileName")
+            val existing = pendingUploads[filePath]
+            if (existing != null && failureReason != null && failureReason != existing.failureReason) {
+                pendingUploads[filePath] = existing.copy(failureReason = failureReason)
+                saveToPrefs(context)
+                updateFlow()
+            }
+            return
+        }
+        
+        // BUGFIX: Check for duplicate fileId
+        if (fileId != null) {
+            val existingWithSameFileId = pendingUploads.values.find { it.fileId == fileId }
+            if (existingWithSameFileId != null) {
+                Log.d(TAG, "Upload with same fileId already exists: $fileId, skipping")
+                return
+            }
+        }
+        
         // Create and store the pending upload
         val pendingUpload = PendingUpload(
             fileName = fileName,

@@ -22,7 +22,6 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.google.api.client.http.InputStreamContent
-import com.google.api.client.util.IOUtils
 import java.io.BufferedInputStream
 import java.io.FileInputStream
 import java.io.IOException
@@ -128,7 +127,6 @@ object GoogleDriveUploader {
             ).setSelectedAccount(account.account)
 
             val httpTransport = NetHttpTransport.Builder()
-                .doNotValidateCertificate()
                 .build()
             
             val driveService = Drive.Builder(
@@ -182,13 +180,13 @@ object GoogleDriveUploader {
                 try {
                     val permission = Permission()
                         .setType("anyone")
-                        .setRole("writer")
+                        .setRole("reader")
 
                     driveService.permissions().create(fileId, permission)
                         .setFields("id")
                         .execute()
 
-                    Log.i(TAG, "Set file permission to anyone with link (with edit access): $fileId")
+                    Log.i(TAG, "Set file permission to anyone with link (read access): $fileId")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error setting file permissions: ${e.message}")
                 }

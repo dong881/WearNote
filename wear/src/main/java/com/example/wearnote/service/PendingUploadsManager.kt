@@ -5,11 +5,6 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import com.example.wearnote.model.PendingUpload
-import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
-import com.google.api.client.http.javanet.NetHttpTransport
-import com.google.api.client.json.gson.GsonFactory
-import com.google.api.services.drive.Drive
-import com.google.api.services.drive.DriveScopes
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
@@ -20,8 +15,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import com.google.android.gms.auth.api.signin.GoogleSignIn
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
 
 /**
  * Centralized manager for handling pending uploads
@@ -465,16 +458,6 @@ object PendingUploadsManager {
                 return@withContext false
             }
             
-            val credential = GoogleAccountCredential.usingOAuth2(
-                context, listOf(DriveScopes.DRIVE_FILE, DriveScopes.DRIVE)
-            ).setSelectedAccount(account.account)
-            
-            val driveService = Drive.Builder(
-                NetHttpTransport(),
-                GsonFactory.getDefaultInstance(),
-                credential
-            ).setApplicationName("WearNote").build()
-            
             val fileId = GoogleDriveUploader.upload(context, file)
             
             if (fileId != null) {
@@ -538,7 +521,7 @@ object PendingUploadsManager {
                     val upload = entry.value
                     upload.fileId != null && 
                     fileIdMap[upload.fileId] != null && 
-                    fileIdMap[upload.fileId] !== upload // Not the same instance
+                    fileIdMap[upload.fileId]?.filePath != upload.filePath // Compare by value not reference
                 }
                 
                 Log.d(TAG, "Removed ${loadedUploads.size - pendingUploads.size} duplicate fileId entries")

@@ -429,13 +429,14 @@ fun AnimatedSmallButton(
     val highlightColor = Color.White.copy(alpha = flashAlpha)
     
     // Handle click with animations
+    val scope = rememberCoroutineScope()
     fun handleClick() {
         wasJustClicked = true
         vibrateDevice(context, 40, true) // Pattern vibration for click
         onClick()
         
         // Reset the "just clicked" state after animation completes
-        kotlinx.coroutines.MainScope().launch {
+        scope.launch {
             kotlinx.coroutines.delay(300)
             wasJustClicked = false
         }

@@ -23,6 +23,7 @@ object KeystoreHelper {
             Log.d(TAG, "Package: ${context.packageName}")
             
             // Get signature of the app
+            @Suppress("DEPRECATION")
             val info = context.packageManager.getPackageInfo(
                 context.packageName,
                 PackageManager.GET_SIGNATURES

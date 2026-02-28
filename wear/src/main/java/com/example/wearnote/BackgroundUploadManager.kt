@@ -10,7 +10,9 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Manages background uploads and persists their state between app restarts
+ * @deprecated Use [com.example.wearnote.service.PendingUploadsManager] instead
  */
+@Deprecated("Use PendingUploadsManager instead", replaceWith = ReplaceWith("PendingUploadsManager"))
 object BackgroundUploadManager {
     private const val TAG = "BackgroundUploadManager"
     private const val PREFS_NAME = "upload_manager_prefs"

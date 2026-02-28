@@ -17,15 +17,14 @@ import kotlinx.coroutines.launch
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
-import android.widget.Toast
 
 /**
  * Service that monitors network conditions and optimizes upload strategies.
  * It helps determine the best upload method based on connection type and quality.
  */
 class NetworkMonitorService : Service() {
-    private val TAG = "NetworkMonitorService"
-    private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
+    private val serviceJob = Job()
+    private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     
@@ -55,6 +54,7 @@ class NetworkMonitorService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterNetworkCallback()
+        serviceJob.cancel()
         Log.d(TAG, "NetworkMonitorService destroyed")
     }
     
@@ -192,7 +192,6 @@ class NetworkMonitorService : Service() {
         Log.d(TAG, "No network available")
     }
     
-    // BUGFIX: Synchronize to prevent race conditions
     @Synchronized
     private fun updateUploadStrategy() {
         // If we detect we're using Bluetooth tethering with slow speed, set a flag that
@@ -200,15 +199,12 @@ class NetworkMonitorService : Service() {
         val isSlowBluetooth = isBluetoothTethered.get() && !isFastConnection.get()
         
         // Save the status for GoogleDriveUploader to use
-        // BUGFIX: Use synchronized block to prevent concurrent modification
-        synchronized(this) {
-            getSharedPreferences("network_prefs", Context.MODE_PRIVATE).edit().apply {
-                putBoolean("is_slow_bluetooth", isSlowBluetooth)
-                putBoolean("is_wifi", isWifiConnected.get())
-                putBoolean("is_fast_connection", isFastConnection.get())
-                putLong("last_update_time", System.currentTimeMillis())
-                apply()
-            }
+        getSharedPreferences("network_prefs", Context.MODE_PRIVATE).edit().apply {
+            putBoolean("is_slow_bluetooth", isSlowBluetooth)
+            putBoolean("is_wifi", isWifiConnected.get())
+            putBoolean("is_fast_connection", isFastConnection.get())
+            putLong("last_update_time", System.currentTimeMillis())
+            apply()
         }
         
         if (isSlowBluetooth) {
@@ -238,6 +234,8 @@ class NetworkMonitorService : Service() {
     }
     
     companion object {
+        private const val TAG = "NetworkMonitorService"
+        
         // Helper method to check if we're on a slow Bluetooth connection
         fun isSlowBluetoothConnection(context: Context): Boolean {
             return context.getSharedPreferences("network_prefs", Context.MODE_PRIVATE)

@@ -12,23 +12,25 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class NetworkChangeReceiver : BroadcastReceiver() {
-    private val TAG = "NetworkChangeReceiver"
+    companion object {
+        private const val TAG = "NetworkChangeReceiver"
+    }
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == ConnectivityManager.CONNECTIVITY_ACTION) {
             if (isNetworkAvailable(context)) {
                 Log.d(TAG, "Network is now available, processing pending uploads")
-                // Try to upload pending files when network becomes available
+                // Use goAsync to properly manage the BroadcastReceiver lifecycle
+                val pendingResult = goAsync()
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         // Ensure PendingUploadsManager is initialized before processing
                         PendingUploadsManager.initialize(context)
                         PendingUploadsManager.processAllPendingUploads(context)
-                        
-                        // As a fallback, also try the legacy method
-                        GoogleDriveUploader.processPending(context)
                     } catch (e: Exception) {
                         Log.e(TAG, "Error processing pending uploads on network change", e)
+                    } finally {
+                        pendingResult.finish()
                     }
                 }
             } else {

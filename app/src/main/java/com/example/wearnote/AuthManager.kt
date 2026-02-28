@@ -1,7 +1,6 @@
 package com.example.wearnote
 
 import android.content.Context
-import android.content.Intent
 import androidx.activity.ComponentActivity
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInClient

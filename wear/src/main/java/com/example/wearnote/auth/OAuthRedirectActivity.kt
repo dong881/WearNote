@@ -11,7 +11,9 @@ import com.example.wearnote.MainActivity
  */
 class OAuthRedirectActivity : ComponentActivity() {
     
-    private val TAG = "OAuthRedirectActivity"
+    companion object {
+        private const val TAG = "OAuthRedirectActivity"
+    }
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

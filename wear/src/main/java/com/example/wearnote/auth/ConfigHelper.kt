@@ -47,6 +47,7 @@ object ConfigHelper {
         
         // 檢查 SHA-1 證書指紋 (用於診斷 ApiException: 10)
         try {
+            @Suppress("DEPRECATION")
             val info = context.packageManager.getPackageInfo(
                 context.packageName,
                 PackageManager.GET_SIGNATURES

@@ -12,10 +12,13 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity {
+class MainActivity : ComponentActivity() {
     private lateinit var driveViewModel: DriveViewModel
     private lateinit var authManager: AuthManager
-    private val TAG = "MainActivity"
+    
+    companion object {
+        private const val TAG = "MainActivity"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

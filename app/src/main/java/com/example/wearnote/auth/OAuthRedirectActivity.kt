@@ -6,7 +6,6 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import android.net.Uri
 import android.util.Log
-import androidx.core.os.bundleOf
 import com.example.wearnote.MainActivity
 import kotlinx.coroutines.launch
 

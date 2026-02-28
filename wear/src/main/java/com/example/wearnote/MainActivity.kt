@@ -16,7 +16,6 @@ import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import android.os.BatteryManager
-import android.content.IntentFilter as AndroidIntentFilter
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -945,7 +944,7 @@ class MainActivity : ComponentActivity() {
     
     @Composable
     fun WearNoteTheme(content: @Composable () -> Unit) {
-        MaterialTheme(content = content)
+        com.example.wearnote.presentation.theme.WearNoteTheme(content = content)
     }
 
     // UX IMPROVEMENT: Get battery level

@@ -17,7 +17,6 @@ import kotlinx.coroutines.launch
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
-import android.widget.Toast
 
 /**
  * Service that monitors network conditions and optimizes upload strategies.

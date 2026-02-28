@@ -4,7 +4,6 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.media.MediaRecorder
-import android.net.Uri
 import android.os.*
 import android.util.Log
 import android.widget.Toast
@@ -13,15 +12,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.wearnote.MainActivity
 import com.example.wearnote.R
-import com.example.wearnote.service.GoogleDriveUploader  // Changed from util to service package
-import com.example.wearnote.service.PendingUploadsManager  // Changed from util to service package
 import com.example.wearnote.model.PendingUpload
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
-import com.google.api.client.http.javanet.NetHttpTransport
-import com.google.api.client.json.gson.GsonFactory
-import com.google.api.services.drive.Drive
-import com.google.api.services.drive.DriveScopes
 import kotlinx.coroutines.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -53,16 +44,13 @@ class RecorderService : Service() {
         const val ACTION_START_AI_PROCESSING = "com.example.wearnote.ACTION_START_AI_PROCESSING" // New action
         const val ACTION_UPLOAD_AND_PROCESS = "com.example.wearnote.ACTION_UPLOAD_AND_PROCESS"
 
-        private val pendingUploads = ConcurrentHashMap<String, Boolean>()
+        private val pendingUploads = ConcurrentHashMap<String, Boolean>() // TODO: Consider removing in favor of PendingUploadsManager
 
         // Create a global processing scope that is not tied to the service lifecycle
         private val processingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
         // Track active processing jobs
         private val isProcessingActive = AtomicBoolean(false)
-
-        // This keeps track of files being processed
-        private val processingFiles = ConcurrentHashMap<String, File>()
     }
 
     private var mediaRecorder: MediaRecorder? = null
@@ -80,12 +68,6 @@ class RecorderService : Service() {
     private val VOLUME_CHECK_INTERVAL = 60000L // Check every minute
     private val LOW_VOLUME_THRESHOLD = 15 * 60 * 1000L // 15 minutes
     private val LOW_VOLUME_AMPLITUDE_THRESHOLD = 500 // Threshold for considering volume "low"
-
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(120, TimeUnit.SECONDS)  // 2 minutes for connection
-        .readTimeout(300, TimeUnit.SECONDS)     // 5 minutes for response reading
-        .writeTimeout(60, TimeUnit.SECONDS)     // 1 minute for request writing
-        .build()
 
     private val API_URL = "http://140.118.123.107:5000/process"
 
@@ -837,7 +819,8 @@ class RecorderService : Service() {
             .setOngoing(true)
             .build()
     }
-     private fun showProcessingFailureNotification(errorMessage: String) {
+    
+    private fun showProcessingFailureNotification(errorMessage: String) {
         try {
             val notificationBuilder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_mic)

@@ -19,7 +19,10 @@ class DriveService(private val context: Context) {
     private val authManager = AuthManager(context)
     private val transport = NetHttpTransport()
     private val jsonFactory = GsonFactory.getDefaultInstance()
-    private val TAG = "DriveService"
+    
+    companion object {
+        private const val TAG = "DriveService"
+    }
     
     // Get configured Drive service instance
     private suspend fun getDriveService(): Drive? {

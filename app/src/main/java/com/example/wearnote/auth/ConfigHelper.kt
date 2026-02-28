@@ -36,10 +36,11 @@ object ConfigHelper {
         Log.d(TAG, "應用包名: ${context.packageName}")
         
         // 輸出當前 CLIENT_ID
-        Log.d(TAG, "當前 CLIENT_ID: ${DriveConstants.CLIENT_ID}")
+        Log.d(TAG, "當前 CLIENT_ID: ${DriveConstants.getClientId(context)}")
         
         // 檢查 SHA-1 證書指紋 (用於診斷 ApiException: 10)
         try {
+            @Suppress("DEPRECATION")
             val info = context.packageManager.getPackageInfo(
                 context.packageName,
                 PackageManager.GET_SIGNATURES

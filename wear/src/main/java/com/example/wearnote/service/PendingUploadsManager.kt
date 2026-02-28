@@ -519,9 +519,14 @@ object PendingUploadsManager {
                 // Identify and remove duplicates (older entries with same fileId)
                 pendingUploads.entries.removeIf { entry ->
                     val upload = entry.value
-                    upload.fileId != null && 
-                    fileIdMap[upload.fileId] != null && 
-                    fileIdMap[upload.fileId]?.filePath != upload.filePath // Compare by value not reference
+                    val fileId = upload.fileId
+                    if (fileId != null) {
+                        val bestUpload = fileIdMap[fileId]
+                        // Remove if there's a better (newer) upload with the same fileId
+                        bestUpload != null && bestUpload.filePath != upload.filePath
+                    } else {
+                        false
+                    }
                 }
                 
                 Log.d(TAG, "Removed ${loadedUploads.size - pendingUploads.size} duplicate fileId entries")

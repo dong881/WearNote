@@ -22,7 +22,6 @@ import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -43,8 +42,6 @@ class RecorderService : Service() {
         const val ACTION_CHECK_UPLOAD_STATUS = "com.example.wearnote.ACTION_CHECK_UPLOAD_STATUS"
         const val ACTION_START_AI_PROCESSING = "com.example.wearnote.ACTION_START_AI_PROCESSING" // New action
         const val ACTION_UPLOAD_AND_PROCESS = "com.example.wearnote.ACTION_UPLOAD_AND_PROCESS"
-
-        private val pendingUploads = ConcurrentHashMap<String, Boolean>() // TODO: Consider removing in favor of PendingUploadsManager
 
         // Create a global processing scope that is not tied to the service lifecycle
         private val processingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -244,10 +241,11 @@ class RecorderService : Service() {
     }
 
     private fun checkUploadStatus() {
-        if (pendingUploads.isNotEmpty()) {
+        val pendingCount = PendingUploadsManager.getPendingUploadCount()
+        if (pendingCount > 0) {
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Uploads in Progress")
-                .setContentText("${pendingUploads.count { !it.value }} files uploading")
+                .setContentText("$pendingCount files uploading")
                 .setSmallIcon(R.drawable.ic_mic)
                 .build()
 
@@ -255,7 +253,7 @@ class RecorderService : Service() {
 
             val intent = Intent(MainActivity.ACTION_RECORDING_STATUS).apply {
                 putExtra(MainActivity.EXTRA_STATUS, "uploads_pending")
-                putExtra("count", pendingUploads.count { !it.value })
+                putExtra("count", pendingCount)
             }
             intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             sendBroadcast(intent)
@@ -540,8 +538,6 @@ class RecorderService : Service() {
 
             if (::outputFile.isInitialized && outputFile.exists() && outputFile.length() > 100) {
                 Log.d(TAG, "Recording saved: ${outputFile.absolutePath}, size: ${outputFile.length()} bytes. Starting upload process.")
-
-                pendingUploads[outputFile.name] = false
 
                 // Start NetworkMonitorService to analyze connection
                 NetworkMonitorService.startMonitoring(this)
